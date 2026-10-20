@@ -1,38 +1,104 @@
 # Lerang
 
-Aplikasi lelang barang berbasis web, dengan peran peserta, petugas, dan administrator.
+A web auction application for participants, auction officers, and administrators, covering item submissions, bidding, payments, and delivery records.
 
-## Stack dan fitur
+## Features
 
-- React, TypeScript, Vite, dan Tailwind CSS untuk antarmuka.
-- Go dengan REST API untuk validasi dan proses bisnis.
-- Firebase Authentication dan Realtime Database untuk akun serta data aplikasi.
-- Midtrans Snap Sandbox untuk pengujian pembayaran dan sinkronisasi status.
-- Pengajuan/kurasi barang, sesi lelang, penawaran, jaminan, tagihan, dan pencatatan pengiriman.
-- Administrasi transaksi, statistik berdasarkan periode, dan ekspor laporan PDF/CSV.
-- Unggah beberapa foto melalui server Go, dengan pratinjau dan pilihan sampul.
+- Item submissions, photo uploads, and officer review.
+- Auction scheduling, bidding, deposits, and automatic bidding limits.
+- Wallet records, invoices, and payment status checks.
+- Delivery and local pickup records.
+- Admin work queues, date-range statistics, and PDF/CSV reports.
 
-## Menjalankan lokal
+## Tech stack
 
-Siapkan Node.js yang mendukung Vite 6, Go sesuai `go.mod`, dan proyek Firebase milik sendiri.
+- Frontend: React, TypeScript, Vite, and Tailwind CSS.
+- Backend: Go with a REST API built on `net/http`.
+- Authentication: Firebase Authentication.
+- Database: Firebase Realtime Database through the Firebase Admin SDK.
+- Payments: Midtrans Snap in Sandbox mode.
+- Reports: Recharts, jsPDF, and CSV exports.
 
-1. Salin `.env.example` menjadi `.env`, kemudian isi konfigurasi Firebase Web App dan URL Realtime Database.
-2. Simpan service-account di `secrets/firebase-service-account.json` dan sesuaikan `FIREBASE_CREDENTIALS`.
-3. Aktifkan metode autentikasi yang dipakai pada Firebase Console. Domain website harus diizinkan pada konfigurasi Authentication.
-4. Isi pasangan kunci Midtrans Sandbox bila ingin menguji pembayaran. Biarkan `MIDTRANS_IS_PRODUCTION=false` untuk pengembangan.
-5. Jalankan `npm ci`, lalu `go run .` dan `npm run dev` pada terminal terpisah.
+React sends Firebase ID tokens to Go, which checks access, validates requests, and updates RTDB. Payment and balance changes are verified on the server. Frontend data refreshes through polling.
 
-Vite berjalan di `http://localhost:5173` dan meneruskan `/api` ke Go pada port 8080. Frontend tidak membaca data RTDB secara langsung; aturan database pada `database.rules.json` menolak akses klien, sementara API menggunakan Firebase Admin SDK.
+MySQL is only used by the optional migration tool, not by the application at runtime.
 
-## Foto dan deployment
+## Requirements
 
-`PHOTO_UPLOAD_DIR` mengaktifkan penyimpanan foto pada folder server jika Firebase Storage tidak tersedia. Batasnya 10 MB per file dan 500 MB untuk folder foto. Gunakan disk persisten dan cadangkan folder tersebut bersama database.
+- Node.js 24+ and npm. Tests use [Node's native TypeScript support](https://nodejs.org/api/typescript.html).
+- Go 1.26.5 or newer, as specified in `go.mod`.
+- A Firebase project with Authentication, Realtime Database, and a service-account key.
+- Midtrans Sandbox credentials to test payments.
 
-Hosting statis saja tidak menjalankan Go. Saat deploy, jalankan API sebagai layanan tersendiri dan teruskan `/api`, termasuk `/api/photos`, melalui reverse proxy. Sesuaikan origin, URL website, dan konfigurasi Firebase sebelum deploy.
+## Local setup
 
-`firebase.json` mengatur hosting halaman aksi email dan rules database. Pilih proyek/site Firebase milik sendiri sebelum menjalankan perintah deploy. Konfigurasi itu tidak memublikasikan seluruh aplikasi maupun API Go.
+### 1. Install dependencies
 
-## Pemeriksaan
+```sh
+git clone https://github.com/dreallry/Lerang.git
+cd Lerang
+npm ci
+```
+
+### 2. Configure the environment
+
+Copy `.env.example` to `.env` and replace the placeholders with your own settings.
+
+| Configuration | Purpose |
+| --- | --- |
+| `VITE_FIREBASE_*` | Public Firebase Web App configuration. Fill every field in the template. |
+| `FIREBASE_CREDENTIALS` | Path to your service-account JSON file. |
+| `FIREBASE_DATABASE_URL` | RTDB URL; must match `VITE_FIREBASE_DATABASE_URL`. |
+| `FIREBASE_STORAGE_BUCKET` | Optional server-side bucket configuration for uploads. |
+| `PHOTO_UPLOAD_DIR` | Server photo directory used when Firebase Storage is unavailable. |
+| `MIDTRANS_MERCHANT_ID`, `MIDTRANS_SERVER_KEY`, `MIDTRANS_CLIENT_KEY` | Credentials from one Sandbox account. |
+| `MIDTRANS_IS_PRODUCTION` | Keep `false` for development. |
+| `VITE_API_BASE_URL`, `VITE_APP_URL` | API path and frontend URL. Defaults: `/api` and `http://localhost:5173`. |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins. |
+
+Save the service account at `secrets/firebase-service-account.json`, or update its path. Use the same Firebase project for both configurations.
+
+Enable Email/Password and authorize your frontend domain in Firebase Authentication. Enable the Google provider to use Google sign-in.
+
+Apply `database.rules.json` to RTDB. These rules deny direct client access; data is served through Go.
+
+### 3. Start the application
+
+Run the API in one terminal:
+
+```sh
+go run .
+```
+
+Run the frontend in another:
+
+```sh
+npm run dev
+```
+
+Open `http://localhost:5173`. Vite proxies `/api` to Go on port `8080`. Restart both after changing environment settings.
+
+A new database starts empty. Create a staff account, add a lot, then assign it to an auction session.
+
+### 4. Create a staff account
+
+Replace the example email with an address you control:
+
+```sh
+go run ./scripts/provision-firebase-staff --email admin@example.com --role administrator
+```
+
+This provisions Auth and the RTDB role. Use `petugas` for an officer. Set the password through **Forgot password** on the login page. Participants register in the application.
+
+## Payments and uploads
+
+Go verifies Sandbox orders with Midtrans before updating funds. Set the notification URL to your public HTTPS API address followed by `/api/midtrans/webhook`.
+
+Uploads use Firebase Storage when available; otherwise, `PHOTO_UPLOAD_DIR=uploads/lot-photos` enables server storage. Each item supports 12 photos, up to 10 MB per file: JPG, PNG, WebP, or GIF.
+
+Server storage is capped at 500 MB. Removing a photo from a form keeps its file on disk; clean up unused files during maintenance. Back up photos with RTDB data.
+
+## Checks and builds
 
 ```sh
 npm test
@@ -40,12 +106,42 @@ go test ./...
 npm run build
 ```
 
-`npm run check:firebase` dan `npm run check:payments` memeriksa layanan menggunakan `.env` lokal. Command daftar akun hanya untuk administrator dan hasilnya tidak boleh ditambahkan ke repository.
+| Command | Purpose |
+| --- | --- |
+| `npm run check:firebase` | Check project settings, Auth, RTDB access, and the Storage bucket. |
+| `npm run check:payments` | Check Sandbox Server Key access without creating a payment. |
+| `npm run check:admin-modules` | Check admin page imports while the Vite dev server is running. |
+| `npm run accounts:list` | List account readiness for local administration. Keep its output private. |
+| `npm run preview` | Preview the frontend build; keep the Go API running. |
+| `npm run build:auth` | Build standalone email action pages into `dist-auth/`. |
 
-Panduan migrasi, provisioning staf, dan pemeliharaan ada di [scripts/README.md](scripts/README.md). MySQL hanya diperlukan untuk migrasi data lama; aplikasi menggunakan RTDB sebagai database utama. Dump dan akun asli tidak disertakan.
+The Firebase check flags missing Storage even with disk uploads configured; review individual results. The payment check validates Server Key access; checkout is needed to confirm the Client Key pairing.
 
-## Berkas privat
+## Deployment
 
-`.env`, service-account, folder `secrets/`, unggahan pengguna, dump database, catatan/screenshot pengujian, dan hasil build dikecualikan dari Git. Nilai `VITE_*` masuk ke bundle browser, sehingga hanya boleh memuat konfigurasi publik Firebase, bukan Server Key atau private key.
+Build the frontend with `npm run build` and serve `dist/`. Run Go as a separate service with its own environment and service-account configuration.
 
-Pembayaran berjalan pada Sandbox selama pengembangan. Penarikan bank, ongkir, dan riwayat ekspedisi masih memerlukan pencatatan petugas; aplikasi tidak mengirim transfer bank atau mengambil tracking kurir secara otomatis.
+- Forward `/api`, including `/api/photos`, from the website to Go.
+- Set `VITE_APP_URL`, Firebase authorized domains, and `CORS_ALLOWED_ORIGINS` for the deployed website.
+- Use persistent storage for photos and keep credentials outside public directories.
+- Set the public Midtrans notification URL for the deployed API.
+
+`firebase.json` deploys email action pages from `dist-auth/`, not the main frontend or Go API. Update its site setting for your Firebase project. Custom password-reset links require the matching action URL in Firebase Authentication.
+
+## Project structure
+
+```text
+api/         Go handlers, validation, transactions, and backend tests
+src/         React pages, shared components, API client, and utilities
+tests/       Frontend logic tests and browser fixtures
+scripts/     Service checks, staff provisioning, and MySQL migration
+public/      Public application assets
+```
+
+The [operations and migration guide](scripts/README.md) is currently in Indonesian. Real accounts and database dumps are not included.
+
+## Current limits and private files
+
+Withdrawals, shipping fees, and delivery progress require staff records and external handling. Automated bank transfers and carrier APIs are not integrated. Payments use Sandbox, not live charging.
+
+`.env`, service accounts, `secrets/`, uploads, database dumps, verification records, and builds are excluded from Git. `VITE_*` values are public in the browser bundle. Keep private keys and the Midtrans Server Key on the server.
