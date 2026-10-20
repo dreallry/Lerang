@@ -1,0 +1,42 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+*firebase*adminsdk*.json
+*firebase*service*account*.json
+firebase-adminsdk.json
+firebase-service-account.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# User files, database exports, and private verification records
+uploads/
+artifacts/
+*.sql
+*.sql.*
+*.sqlite
+*.sqlite3
+*.db
+*.bak
+*.zip
+*.7z
+*.tar
+*.gz
+
+# Generated dependencies, builds, caches, and scratch files
+node_modules/
+dist/
+dist-auth/
+.firebase/
+tmp/
+coverage/
+*.exe
+*.dll
+*.log
+*.tsbuildinfo
+*_before.txt
+.DS_Store
+Thumbs.db

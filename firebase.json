@@ -1,0 +1,22 @@
+{
+  "hosting": {
+    "site": "lerangku",
+    "public": "dist-auth",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [{ "source": "**", "destination": "/auth-actions.html" }],
+    "headers": [{ "source": "**", "headers": [
+      { "key": "Referrer-Policy", "value": "no-referrer" },
+      { "key": "X-Content-Type-Options", "value": "nosniff" },
+      { "key": "X-Frame-Options", "value": "DENY" },
+      { "key": "Cache-Control", "value": "no-store" }
+    ] }]
+  },
+  "database": {
+    "rules": "database.rules.json"
+  },
+  "auth": {
+    "providers": {
+      "emailPassword": true
+    }
+  }
+}

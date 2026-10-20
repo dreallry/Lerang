@@ -1,0 +1,73 @@
+import type { TbBarang, TbLelang, HistoryLelang } from '../types';
+
+function positiveID(value: unknown): number {
+  const id = Number(value);
+  if (!Number.isSafeInteger(id) || id <= 0) throw new Error('ID data dari server tidak valid.');
+  return id;
+}
+
+function amount(value: unknown): number {
+  const result = Number(value ?? 0);
+  if (!Number.isFinite(result) || result < 0) throw new Error('Nilai data dari server tidak valid.');
+  return result;
+}
+
+export function normalizeBarang(data: Record<string, unknown>): TbBarang {
+  const id = positiveID(data.id_barang);
+  const price = amount(data.harga_awal);
+  return {
+    ...data,
+    id_barang: id,
+    id_user: data.id_user ? positiveID(data.id_user) : null,
+    harga_awal: price,
+    nama_barang: String(data.nama_barang || ''),
+    deskripsi_barang: String(data.deskripsi_barang || ''),
+    kategori: String(data.kategori || 'Lainnya') as TbBarang['kategori'],
+    tanggal: String(data.tanggal || data.created_at || ''),
+    status_verifikasi: String(data.status_verifikasi || 'approved') as TbBarang['status_verifikasi'],
+    foto_barang: Array.isArray(data.foto_barang) ? data.foto_barang.filter((url): url is string => typeof url === 'string') : [],
+    dokumen_pendukung: Array.isArray(data.dokumen_pendukung) ? data.dokumen_pendukung.filter((url): url is string => typeof url === 'string') : [],
+    reserve_price: data.reserve_price ? amount(data.reserve_price) : undefined,
+  } as TbBarang;
+}
+
+export function normalizeLelang(value: Record<string, unknown>): TbLelang {
+  const data = value.lelang && typeof value.lelang === 'object' ? value.lelang as Record<string, unknown> : value;
+  return {
+    ...data,
+    id_lelang: positiveID(data.id_lelang),
+    id_barang: positiveID(data.id_barang),
+    id_sesi: data.id_sesi ? positiveID(data.id_sesi) : undefined,
+    id_petugas: data.id_petugas ? positiveID(data.id_petugas) : 0,
+    id_user: data.id_user ? positiveID(data.id_user) : null,
+    tgl_mulai: String(data.tgl_mulai || ''),
+    tgl_selesai: String(data.tgl_selesai || ''),
+    harga_akhir: amount(data.harga_akhir),
+    minimum_bid: data.minimum_bid !== undefined ? amount(data.minimum_bid) : undefined,
+    bid_increment: data.bid_increment !== undefined ? amount(data.bid_increment) : undefined,
+    kelipatan_minimal: amount(data.kelipatan_minimal),
+    uang_jaminan: amount(data.uang_jaminan),
+    reserve_price: data.reserve_price ? amount(data.reserve_price) : undefined,
+    status: String(data.status || 'terjadwal') as TbLelang['status'],
+    is_reserve_met: data.is_reserve_met === true,
+  } as TbLelang;
+}
+
+export function normalizeHistory(data: Record<string, unknown>, auctions: TbLelang[]): HistoryLelang {
+  const auctionID = positiveID(data.id_lelang);
+  const itemID = data.id_barang || auctions.find(auction => auction.id_lelang === auctionID)?.id_barang;
+  return {
+    ...data,
+    id_history: String(data.id_history),
+    id_lelang: auctionID,
+    id_barang: positiveID(itemID),
+    id_user: positiveID(data.id_user),
+    nama_user: String(data.nama_user || 'Peserta'),
+    penawaran_harga: amount(data.penawaran_harga),
+    created_at: String(data.created_at || ''),
+  } as HistoryLelang;
+}
+
+export function mergeBarang(first: TbBarang[], latest: TbBarang[]): TbBarang[] {
+  return [...new Map([...first, ...latest].map(item => [item.id_barang, item])).values()];
+}

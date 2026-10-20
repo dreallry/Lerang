@@ -1,0 +1,57 @@
+{
+  "name": "lelang-online",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node --max-old-space-size=4096 node_modules/typescript/bin/tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "node --test tests/*.test.mjs",
+    "check:firebase": "node scripts/check-firebase.mjs",
+    "check:payments": "node scripts/check-payments.mjs",
+    "accounts:list": "node scripts/list-accounts.mjs",
+    "check:admin-modules": "node scripts/check-admin-modules.mjs",
+    "build:auth": "vite build --config vite.auth.config.ts"
+  },
+  "dependencies": {
+    "@radix-ui/react-navigation-menu": "^1.2.22",
+    "@studio-freight/lenis": "^1.0.42",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "firebase": "^13.0.0",
+    "framer-motion": "^13.2.0",
+    "gsap": "^3.15.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.9",
+    "lucide-react": "^0.475.0",
+    "radix-ui": "^1.6.7",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.1",
+    "tailwind-merge": "^3.0.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22.13.4",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.5.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.7.2",
+    "vite": "^6.1.0"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.3": true,
+    "core-js@3.50.0": true,
+    "esbuild@0.25.12": true,
+    "protobufjs@7.6.6": true
+  },
+  "overrides": {
+    "@grpc/grpc-js": "^1.14.5",
+    "postcss-selector-parser": "^7.1.6",
+    "dompurify": "^3.4.17"
+  }
+}
