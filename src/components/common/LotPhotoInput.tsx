@@ -26,6 +26,8 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
   const locked = disabled || busy;
   const full = photos.length >= MAX_LOT_PHOTOS;
 
+  useEffect(() => () => { uploadController.current?.abort(); }, []);
+
   useEffect(() => {
     let active = true;
     setAvailability('loading');
@@ -56,6 +58,7 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
         setProgress(`Mengunggah ${index + 1} dari ${files.length}: ${files[index].name}`);
         try {
           const uploadedUrl = await api.uploadFoto(files[index], controller.signal);
+          if (controller.signal.aborted) break;
           nextPhotos.push(uploadedUrl);
           onChange([...nextPhotos]);
           saved++;

@@ -23,17 +23,13 @@ func rtdbRef(path string) (*firebaseDB.Ref, error) {
 }
 
 func rtdbGet(ctx context.Context, path string, target any) error {
-	ref, err := rtdbRef(path)
+	targetType := reflect.TypeOf(target)
+	if targetType == nil || targetType.Kind() != reflect.Pointer || reflect.ValueOf(target).IsNil() {
+		return errors.New("tujuan pembacaan Firebase harus pointer")
+	}
+	raw, err := rtdbRead(ctx, path)
 	if err != nil {
 		return err
-	}
-	var raw interface{}
-	if err := ref.Get(ctx, &raw); err != nil {
-		return err
-	}
-	targetType := reflect.TypeOf(target)
-	if targetType == nil || targetType.Kind() != reflect.Pointer {
-		return errors.New("tujuan pembacaan Firebase harus pointer")
 	}
 	bytes, err := json.Marshal(rtdbValueForType(raw, targetType.Elem()))
 	if err != nil {
@@ -63,14 +59,22 @@ func rtdbSet(ctx context.Context, path string, value any) error {
 	if err != nil {
 		return err
 	}
-	return ref.Set(ctx, value)
+	if err := ref.Set(ctx, value); err != nil {
+		return err
+	}
+	invalidatePublicReads()
+	return nil
 }
 
 func rtdbUpdate(ctx context.Context, updates map[string]interface{}) error {
 	if firebaseDatabaseClient == nil {
 		return ErrRTDBUnavailable
 	}
-	return firebaseDatabaseClient.NewRef("").Update(ctx, updates)
+	if err := firebaseDatabaseClient.NewRef("").Update(ctx, updates); err != nil {
+		return err
+	}
+	invalidatePublicReads()
+	return nil
 }
 
 func rtdbDelete(ctx context.Context, path string) error {

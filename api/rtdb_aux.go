@@ -149,11 +149,11 @@ func SetCategoryRTDB(w http.ResponseWriter, r *http.Request) {
 }
 
 func OpenAuctionsRTDB(w http.ResponseWriter, r *http.Request) {
-	now := time.Now()
 	zone := time.FixedZone("WIB", 7*3600)
-	today := now.In(zone).Format("2006-01-02")
 	opened := 0
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
+		today := now.In(zone).Format("2006-01-02")
 		opened = 0
 		schedule := treeRecord(root, "schedules", today)
 		if schedule == nil {
@@ -231,23 +231,23 @@ func CreateOfficerAuctionRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Konfigurasi nilai lelang belum valid")
 		return
 	}
-	now := time.Now()
-	auction := map[string]interface{}{"status": "draft", "harga_akhir": 0, "id_user": nil, "kelipatan_minimal": increment, "uang_jaminan": hold, "reserve_price": reserve, "created_at": now.UTC().Format(time.RFC3339Nano), "id_petugas": rtdbClaimsFromRequest(r).ID, "tgl_mulai": "", "tgl_selesai": ""}
+	auction := map[string]interface{}{"status": "draft", "harga_akhir": 0, "id_user": nil, "kelipatan_minimal": increment, "uang_jaminan": hold, "reserve_price": reserve, "id_petugas": rtdbClaimsFromRequest(r).ID, "tgl_mulai": "", "tgl_selesai": ""}
 	startText, endText := stringValue(req.Lelang["tgl_mulai"], ""), stringValue(req.Lelang["tgl_selesai"], "")
-	if startText != "" || endText != "" {
-		start, e1 := auctionTime(startText)
-		end, e2 := auctionTime(endText)
-		if e1 != nil || e2 != nil || !end.After(start) || !end.After(now) || start.Before(now.Add(-5*time.Minute)) || end.Sub(start) > 168*time.Hour {
-			Error(w, 400, "Jadwal lelang harus valid dan belum berakhir")
-			return
-		}
-		auction["tgl_mulai"], auction["tgl_selesai"], auction["status"] = start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), "terjadwal"
-		if !now.Before(start) {
-			auction["status"] = "dibuka"
-		}
-	}
 	var itemID, auctionID int
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
+		auction["created_at"] = now.UTC().Format(time.RFC3339Nano)
+		if startText != "" || endText != "" {
+			start, e1 := auctionTime(startText)
+			end, e2 := auctionTime(endText)
+			if e1 != nil || e2 != nil || !end.After(start) || !end.After(now) || start.Before(now.Add(-5*time.Minute)) || end.Sub(start) > 168*time.Hour {
+				return domainError(400, "Jadwal lelang harus valid dan belum berakhir")
+			}
+			auction["tgl_mulai"], auction["tgl_selesai"], auction["status"] = start.UTC().Format(time.RFC3339Nano), end.UTC().Format(time.RFC3339Nano), "terjadwal"
+			if !now.Before(start) {
+				auction["status"] = "dibuka"
+			}
+		}
 		itemID, auctionID = nextTreeID(root, "items"), nextTreeID(root, "auctions")
 		item["id_barang"], item["id_user"], item["status_verifikasi"], item["tanggal"], item["created_at"] = itemID, nil, "approved", now.UTC().Format(time.RFC3339Nano), now.UTC().Format(time.RFC3339Nano)
 		auction["id_lelang"], auction["id_barang"] = auctionID, itemID
@@ -279,8 +279,8 @@ func UpdateAuctionStatusRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Status lelang tidak valid")
 		return
 	}
-	now := time.Now()
 	err = rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		auction := treeRecord(root, "auctions", rtdbPathID(id))
 		if auction == nil {
 			return domainError(404, "Lelang tidak ditemukan")

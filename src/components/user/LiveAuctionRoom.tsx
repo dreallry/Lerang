@@ -87,7 +87,7 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
   useEffect(() => {
     if (auctionData) {
       const minNext = auctionData.lelang.minimum_bid ?? auctionData.lelang.harga_akhir + (auctionData.lelang.bid_increment ?? auctionData.lelang.kelipatan_minimal);
-      setCustomBidAmount(String(minNext));
+      setCustomBidAmount(previous => Number.isSafeInteger(Number(previous)) && Number(previous) >= minNext ? previous : String(minNext));
       if (!autoBidMaxInput) {
         setAutoBidMaxInput(String(minNext + (auctionData.lelang.bid_increment ?? auctionData.lelang.kelipatan_minimal) * 5));
       }
@@ -166,7 +166,6 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
         type: 'topup',
         amount: topUpAmount,
         title: `Top-Up & Kunci Jaminan Lot #${lelang.id_lelang}`,
-        refId: `AUTO-LOCK-${lelang.id_lelang}`,
         onSuccess: () => {
           setStatusMessage({
             type: 'success',
@@ -191,6 +190,7 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
   const activeAutoBid = currentUser ? getUserAutoBid(lelang.id_lelang, currentUser.id_user) : null;
 
   const handleInitiateBid = (amount?: number) => {
+    if (isSubmitting) return;
     setStatusMessage(null);
     const targetAmount = amount !== undefined ? amount : Number(customBidAmount);
     if (!Number.isSafeInteger(targetAmount) || targetAmount < minNextBid) {
@@ -740,12 +740,13 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
                       {/* Custom Bid Input */}
                       <div className="space-y-1.5">
                         <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>Nominal Penawaran</span>
+                          <label htmlFor="bid-amount">Nominal Penawaran</label>
                           <span className="font-mono">Min: {formatRupiah(minNextBid)}</span>
                         </div>
                         <div className="relative">
                           <span className="absolute left-3.5 top-2.5 text-xs font-bold text-muted-foreground font-mono">Rp</span>
                           <input
+                            id="bid-amount"
                             type="number"
                             step={bidIncrement}
                             min={minNextBid}
@@ -790,6 +791,7 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
                       <button
                         type="button"
                         onClick={() => handleInitiateBid()}
+                        disabled={isSubmitting}
                         className="w-full py-3 px-4 rounded-xl bg-primary text-primary-foreground font-bold text-xs border border-border flex items-center justify-center gap-2 transition hover:opacity-90 shadow-sm cursor-pointer"
                       >
                         <Gavel className="w-4 h-4" />
@@ -848,10 +850,11 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
 
                           <div className="space-y-1.5">
                             <div className="flex justify-between text-muted-foreground">
-                              <span>Batas Maksimal Anggaran Anda (Rp)</span>
+                              <label htmlFor="auto-bid-limit">Batas Maksimal Anggaran Anda (Rp)</label>
                               <span className="font-mono">Min: {formatRupiah(minNextBid)}</span>
                             </div>
                             <input
+                              id="auto-bid-limit"
                               type="number"
                               step={bidIncrement}
                               min={minNextBid}

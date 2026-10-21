@@ -57,6 +57,7 @@ func TestAdminPaymentListFiltersPaginatesAndExcludesSecrets(t *testing.T) {
 
 func TestAdminPaymentSyncUsesGatewayAndCreditsOnlyOnce(t *testing.T) {
 	root := paymentTestRoot()
+	treeNode(root, "staff")["fixture-officer"] = map[string]interface{}{"uid": "fixture-officer", "id_petugas": 3, "id_level": 2, "role": "petugas", "active": true}
 	order, err := reserveRTDBPayment(root, paymentTestClaims(), testTopUpRequest(), time.Now(), "first")
 	requireNoError(t, err)
 	orderID := stringValue(order["order_id"], "")

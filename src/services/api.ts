@@ -81,7 +81,17 @@ class ApiService {
       ...(options.headers as Record<string, string>),
     };
 
-    const token = await auth.currentUser?.getIdToken();
+    const owner = auth.currentUser;
+    const signal = options.signal || AbortSignal.timeout(30000);
+    const checkSession = () => {
+      signal.throwIfAborted();
+      if (auth.currentUser !== owner) {
+        throw new ApiError('Sesi akun berubah. Periksa akun aktif lalu ulangi tindakan ini.', 409);
+      }
+    };
+    checkSession();
+    const token = await owner?.getIdToken();
+    checkSession();
     if (token && !headers['Authorization']) {
       headers['Authorization'] = `Bearer ${token}`;
     }
@@ -90,26 +100,22 @@ class ApiService {
       headers['Content-Type'] = 'application/json';
     }
 
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: options.signal || AbortSignal.timeout(30000),
-        headers,
-      });
+    const response = await fetch(url, {
+      ...options,
+      signal,
+      headers,
+    });
 
-      const data = await response.json().catch(() => null);
+    const data = await response.json().catch(() => null);
+    checkSession();
 
-      if (!response.ok) {
-        const errorMsg = data?.message || data?.error || `Request failed with status ${response.status}`;
-        throw new ApiError(errorMsg, response.status);
-      }
-	  if(!data || data.success !== true) throw new ApiError('Respons server belum valid. Muat ulang data sebelum melanjutkan.',502);
-
-      return data;
-    } catch (err: any) {
-      console.warn(`[API] Error on ${url}:`, err.message);
-      throw err;
+    if (!response.ok) {
+      const errorMsg = data?.message || data?.error || `Request failed with status ${response.status}`;
+      throw new ApiError(errorMsg, response.status);
     }
+    if (!data || data.success !== true) throw new ApiError('Respons server belum valid. Muat ulang data sebelum melanjutkan.', 502);
+
+    return data;
   }
 
   // ---- AUTH ----
@@ -173,7 +179,7 @@ class ApiService {
     });
   }
 
-  async updateBarang(id: number, data: any) {
+  async updateBarang(id: number, data: Record<string, unknown> & { expected_updated_at: string }) {
     return this.request(`/barang/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -249,6 +255,7 @@ class ApiService {
   }
 
   async validasiBarang(id: number, data: {
+    expected_updated_at: string;
     status: 'approved' | 'rejected';
     catatan_kurasi: string;
     kelipatan_minimal?: number;
@@ -380,11 +387,12 @@ class ApiService {
     return this.request<ApiResponse<CourierOption[]>>('/fulfillment/couriers');
   }
 
-  async updateFulfillmentCourier(id: string, data: { kurir: string; layanan_kurir: string; ongkir: number }) {
+  async updateFulfillmentCourier(id: string, data: { kurir: string; layanan_kurir: string; ongkir: number; expected_updated_at: string }) {
     return this.request(`/fulfillment/${encodeURIComponent(id)}/courier`, { method: 'POST', body: JSON.stringify(data) });
   }
 
   async updateFulfillmentAddress(id: string, data: {
+    expected_updated_at: string;
     nama_penerima: string;
     telp_penerima: string;
     alamat_lengkap: string;
@@ -400,14 +408,14 @@ class ApiService {
     });
   }
 
-  async updateFulfillmentResi(id: string, nomor_resi: string, status: FulfillmentStatus, deskripsi?: string) {
+  async updateFulfillmentResi(id: string, nomor_resi: string, status: FulfillmentStatus, deskripsi: string | undefined, expectedUpdatedAt: string) {
     return this.request(`/fulfillment/${id}/resi`, {
       method: 'POST',
-      body: JSON.stringify({ nomor_resi, status, deskripsi }),
+      body: JSON.stringify({ nomor_resi, status, deskripsi, expected_updated_at: expectedUpdatedAt }),
     });
   }
 
-  async recordShippingPayment(id: string, data: { reference: string; amount: number; courier: string; service: string }) {
+  async recordShippingPayment(id: string, data: { reference: string; amount: number; courier: string; service: string; expected_updated_at: string }) {
     return this.request(`/fulfillment/${encodeURIComponent(id)}/shipping-payment`, { method: 'POST', body: JSON.stringify(data) });
   }
 

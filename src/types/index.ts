@@ -67,11 +67,13 @@ export interface TbBarang {
   id_barang: number;
   nama_barang: string;
   tanggal: string; // Tanggal input
+  created_at?: string;
+  updated_at?: string;
   harga_awal: number; // Harga limit awal
   deskripsi_barang: string;
   kategori: CategoryType;
   foto_barang: string[]; // Foto multi-sudut
-  dokumen_pendukung?: string[]; // STNK, BPKB, Sertifikat, Faktur
+  dokumen_pendukung?: string[]; // Tautan dokumen untuk pemeriksaan petugas.
   spesifikasi?: Record<string, string>;
 
   // Extension for C2C:

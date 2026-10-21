@@ -184,6 +184,9 @@ func applyInvoicePayment(root map[string]interface{}, invoiceKey, orderID string
 	if invoice == nil {
 		return domainError(404, "Tagihan tidak ditemukan")
 	}
+	if invoice["payment_review_required"] == true {
+		return domainError(409, "Tagihan menunggu pemeriksaan pembayaran oleh pengelola")
+	}
 	if stringValue(invoice["status"], "") == "Sudah Dibayar" {
 		return nil
 	}
@@ -233,7 +236,7 @@ func applyInvoicePayment(root map[string]interface{}, invoiceKey, orderID string
 
 func expireInvoice(root map[string]interface{}, key string, now time.Time) error {
 	invoice := treeRecord(root, "invoices", key)
-	if invoice == nil || invoice["legacy_historical"] == true || stringValue(invoice["status"], "") != "Belum Dibayar" {
+	if invoice == nil || invoice["legacy_historical"] == true || invoice["payment_review_required"] == true || stringValue(invoice["status"], "") != "Belum Dibayar" {
 		return nil
 	}
 	id := rtdbPathID(rtdbNumericID(invoice["id_lelang"]))
@@ -245,6 +248,9 @@ func expireInvoice(root map[string]interface{}, key string, now time.Time) error
 		return err
 	}
 	uid := stringValue(invoice["owner_uid"], userUID(root, rtdbNumericID(invoice["id_user"])))
+	if treeRecord(root, "users", uid)["financial_review_required"] == true {
+		return errNoLifecycleWork
+	}
 	if err := releaseAuctionHold(root, id, uid, false, "Jaminan hangus karena batas pelunasan lelang #"+id+" terlewati", now); err != nil {
 		return err
 	}
@@ -268,70 +274,187 @@ func expireInvoice(root map[string]interface{}, key string, now time.Time) error
 	return nil
 }
 
-func sweepAuctions(root map[string]interface{}, now time.Time) error {
-	changed := false
-	for id, value := range treeMap(root["auctions"]) {
+func auctionLifecycleAction(auction map[string]interface{}, now time.Time) string {
+	if auction == nil || auction["legacy_historical"] == true {
+		return ""
+	}
+	status := stringValue(auction["status"], "")
+	if status != "dibuka" && status != "terjadwal" {
+		return ""
+	}
+	start, err1 := auctionTime(auction["tgl_mulai"])
+	end, err2 := auctionTime(auction["tgl_selesai"])
+	if err1 != nil || err2 != nil || !end.After(start) {
+		return ""
+	}
+	if !now.Before(end) {
+		return "close"
+	}
+	if !now.Before(start) && status == "terjadwal" {
+		return "open"
+	}
+	return ""
+}
+
+func advanceAuctionLifecycle(root map[string]interface{}, id string, now time.Time) error {
+	auction := treeRecord(root, "auctions", id)
+	switch auctionLifecycleAction(auction, now) {
+	case "close":
+		return settleAuction(root, id, false, now)
+	case "open":
+		auction["status"] = "dibuka"
+		return nil
+	default:
+		return errNoLifecycleWork
+	}
+}
+
+func invoiceLifecycleDue(invoice map[string]interface{}, now time.Time) bool {
+	if invoice == nil || invoice["legacy_historical"] == true || invoice["payment_review_required"] == true || stringValue(invoice["status"], "") != "Belum Dibayar" {
+		return false
+	}
+	end, err := auctionTime(invoice["batas_pembayaran"])
+	return err == nil && !now.Before(end)
+}
+
+func advanceInvoiceLifecycle(root map[string]interface{}, id string, now time.Time) error {
+	if !invoiceLifecycleDue(treeRecord(root, "invoices", id), now) {
+		return errNoLifecycleWork
+	}
+	return expireInvoice(root, id, now)
+}
+
+func auctionSessionStatus(session map[string]interface{}, auctions map[string]interface{}) string {
+	if session == nil || session["legacy_historical"] == true || stringValue(session["status"], "") == "closed" {
+		return ""
+	}
+	live, upcoming, count := false, false, 0
+	for _, value := range auctions {
 		auction := treeMap(value)
-		if auction == nil || auction["legacy_historical"] == true {
+		if rtdbNumericID(auction["id_sesi"]) != rtdbNumericID(session["id_sesi"]) {
 			continue
 		}
-		status := stringValue(auction["status"], "")
-		if status != "dibuka" && status != "terjadwal" {
-			continue
-		}
-		start, err1 := auctionTime(auction["tgl_mulai"])
-		end, err2 := auctionTime(auction["tgl_selesai"])
-		if err1 != nil || err2 != nil || !end.After(start) {
-			continue
-		}
-		if !now.Before(end) {
-			if err := settleAuction(root, id, false, now); err != nil {
-				return err
-			}
-			changed = true
-		} else if !now.Before(start) && status != "dibuka" {
-			auction["status"] = "dibuka"
-			changed = true
+		count++
+		switch stringValue(auction["status"], "") {
+		case "dibuka":
+			live = true
+		case "terjadwal":
+			upcoming = true
 		}
 	}
-	for key, value := range treeMap(root["invoices"]) {
-		invoice := treeMap(value)
-		if invoice == nil || invoice["legacy_historical"] == true || stringValue(invoice["status"], "") != "Belum Dibayar" {
-			continue
-		}
-		if end, err := auctionTime(invoice["batas_pembayaran"]); err == nil && !now.Before(end) {
-			if err := expireInvoice(root, key, now); err != nil {
-				return err
-			}
-			changed = true
-		}
+	if live && session["status"] != "live" {
+		return "live"
 	}
+	if !live && !upcoming && count > 0 {
+		return "closed"
+	}
+	return ""
+}
+
+func syncAuctionSessions(root map[string]interface{}) error {
+	changed := false
 	for _, value := range treeMap(root["sessions"]) {
 		session := treeMap(value)
-		if session == nil || session["legacy_historical"] == true || stringValue(session["status"], "") == "closed" {
+		if status := auctionSessionStatus(session, treeMap(root["auctions"])); status != "" {
+			session["status"] = status
+			changed = true
+		}
+	}
+	if !changed {
+		return errNoLifecycleWork
+	}
+	return nil
+}
+
+func sweepAuctions(root map[string]interface{}, now time.Time) error {
+	changed := false
+	for id := range treeMap(root["auctions"]) {
+		if err := advanceAuctionLifecycle(root, id, now); err == nil {
+			changed = true
+		} else if !errors.Is(err, errNoLifecycleWork) {
+			return err
+		}
+	}
+	for id := range treeMap(root["invoices"]) {
+		if err := advanceInvoiceLifecycle(root, id, now); err == nil {
+			changed = true
+		} else if !errors.Is(err, errNoLifecycleWork) {
+			return err
+		}
+	}
+	if err := syncAuctionSessions(root); err == nil {
+		changed = true
+	}
+	if !changed {
+		return errNoLifecycleWork
+	}
+	return nil
+}
+
+func runAuctionLifecycle(ctx context.Context, clock func() time.Time) error {
+	// Isolate each money transition so one corrupt lot cannot roll back healthy settlements.
+	auctions, firstErr := rtdbAuctions(ctx)
+	changed := false
+	for id, auction := range auctions {
+		if auctionLifecycleAction(auction, clock()) == "" {
 			continue
 		}
-		live, upcoming, count := false, false, 0
-		for _, auctionValue := range treeMap(root["auctions"]) {
-			auction := treeMap(auctionValue)
-			if rtdbNumericID(auction["id_sesi"]) != rtdbNumericID(session["id_sesi"]) {
-				continue
-			}
-			count++
-			switch stringValue(auction["status"], "") {
-			case "dibuka":
-				live = true
-			case "terjadwal":
-				upcoming = true
-			}
-		}
-		if live && session["status"] != "live" {
-			session["status"] = "live"
+		err := rtdbTransaction(ctx, func(root map[string]interface{}) error {
+			return advanceAuctionLifecycle(root, id, clock())
+		})
+		if err == nil {
 			changed = true
-		} else if !live && !upcoming && count > 0 {
-			session["status"] = "closed"
-			changed = true
+		} else if !errors.Is(err, errNoLifecycleWork) && firstErr == nil {
+			firstErr = err
 		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	invoices, err := rtdbCollection(ctx, "invoices")
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
+	for id, invoice := range invoices {
+		if !invoiceLifecycleDue(invoice, clock()) {
+			continue
+		}
+		err := rtdbTransaction(ctx, func(root map[string]interface{}) error {
+			return advanceInvoiceLifecycle(root, id, clock())
+		})
+		if err == nil {
+			changed = true
+		} else if !errors.Is(err, errNoLifecycleWork) && firstErr == nil {
+			firstErr = err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
+	sessions, err := rtdbCollection(ctx, "sessions")
+	if err != nil && firstErr == nil {
+		firstErr = err
+	}
+	needsSessionSync := changed
+	auctionValues := make(map[string]interface{}, len(auctions))
+	for id, auction := range auctions {
+		auctionValues[id] = auction
+	}
+	for _, session := range sessions {
+		if auctionSessionStatus(session, auctionValues) != "" {
+			needsSessionSync = true
+			break
+		}
+	}
+	if needsSessionSync {
+		if err := rtdbTransaction(ctx, syncAuctionSessions); err == nil {
+			changed = true
+		} else if !errors.Is(err, errNoLifecycleWork) && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return firstErr
 	}
 	if !changed {
 		return errNoLifecycleWork
@@ -347,8 +470,8 @@ func StartAuctionWorker(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case now := <-ticker.C:
-				if err := rtdbTransaction(ctx, func(root map[string]interface{}) error { return sweepAuctions(root, now) }); err != nil && !errors.Is(err, errNoLifecycleWork) {
+			case <-ticker.C:
+				if err := runAuctionLifecycle(ctx, time.Now); err != nil && !errors.Is(err, errNoLifecycleWork) {
 					log.Printf("Penyelesaian lelang belum berhasil: %v", err)
 				}
 			}

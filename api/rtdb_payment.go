@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -178,9 +179,12 @@ func CreateSnapPaymentRTDB(w http.ResponseWriter, r *http.Request) {
 			Error(w, http.StatusBadGateway, "Midtrans belum dapat menyiapkan pembayaran. Periksa status sebelum mengulang")
 			return
 		}
-		if err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		// Complete the durable reservation even if the caller disconnects or changes role.
+		persistCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := rtdbTransaction(persistCtx, func(root map[string]interface{}) error {
 			current := treeRecord(root, "paymentOrders", orderID)
-			if current == nil || stringValue(current["creation_id"], "") != reservation {
+			if current == nil || stringValue(current["creation_id"], "") != reservation || stringValue(current["owner_uid"], "") != claims.UID {
 				return domainError(http.StatusConflict, "Sesi pembuatan pembayaran berubah. Periksa status pembayaran")
 			}
 			current["snap_token"], current["snap_redirect_url"], current["creating_until"] = response.Token, response.RedirectURL, nil
@@ -302,6 +306,9 @@ func applyRTDBPaymentNotification(root map[string]interface{}, notification midt
 		}
 		if invoice["order_id"] != notification.OrderID || (invoice["status"] != "Sudah Dibayar" && (invoice["status"] != "Belum Dibayar" || paymentIsHistorical(root, invoice))) {
 			order["status"], order["review_required"], invoice["payment_review_required"] = "review_required", true, true
+			if profile := treeRecord(root, "users", stringValue(order["owner_uid"], "")); profile != nil {
+				profile["financial_review_required"] = true
+			}
 			return nil
 		}
 		if err := applyInvoicePayment(root, key, notification.OrderID, now); err != nil {

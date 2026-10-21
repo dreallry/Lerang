@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeBarang, normalizeLelang, normalizeHistory, mergeBarang } from '../src/utils/catalogData.ts';
+import { normalizeBarang, normalizeLelang, normalizeHistory, mergeBarang, documentLinkError, itemRevision } from '../src/utils/catalogData.ts';
 
 test('the RTDB joined auction response retains IDs, status, times and zero deposit', () => {
   const auction = normalizeLelang({ lelang: { id_lelang: '4', id_barang: '8', id_user: '2', status: 'dibuka', uang_jaminan: 0, harga_akhir: '150000', kelipatan_minimal: '50000', tgl_mulai: '2026-10-19T10:00:00Z', tgl_selesai: '2026-10-20T10:00:00Z' }, barang: {id_barang:8} });
@@ -37,4 +37,19 @@ test('malformed API records cannot become clickable lots with invalid IDs or pri
   assert.throws(() => normalizeLelang({lelang:{id_barang:8}}));
   assert.throws(() => normalizeBarang({id_barang:8, harga_awal:'broken'}));
   assert.throws(() => normalizeHistory({id_lelang:4, id_user:2, penawaran_harga:100}, []));
+});
+
+test('document input rejects labels before they can fail the whole submission', () => {
+  for (const value of ['STNK, BPKB Asli', '', 'javascript:alert(1)', '/api/photos/fixture.jpg', 'https://user:password@example.com/doc.pdf']) assert.ok(documentLinkError(value, []));
+  assert.equal(documentLinkError('https://example.com/doc.pdf', []), '');
+  assert.match(documentLinkError('https://example.com/doc.pdf', ['https://example.com/doc.pdf']), /sudah/);
+  assert.match(documentLinkError('https://example.com/doc.pdf', Array(12).fill('fixture')), /12/);
+});
+
+test('item revision retains exact server precision and supports dated legacy items', () => {
+  const current = '2026-10-20T10:00:00.123456789Z';
+  assert.equal(itemRevision({ updated_at: current, created_at: 'older', tanggal: 'oldest' }), current);
+  assert.equal(itemRevision({ created_at: 'older', tanggal: 'oldest' }), 'older');
+  assert.equal(itemRevision({ tanggal: 'oldest' }), 'oldest');
+  assert.equal(itemRevision({ tanggal: '' }), '');
 });

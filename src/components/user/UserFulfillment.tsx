@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useAuction } from '../../context/AuctionContext';
 import { formatRupiah, formatDateIndo } from '../../utils/formatters';
 import {
@@ -51,6 +51,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     kode_pos: '',
   });
   const [isEditingAddress, setIsEditingAddress] = useState(false);
+  const [addressRevision, setAddressRevision] = useState('');
 
 
   // Rating & Review form state
@@ -84,21 +85,31 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     return relevantOrders.length > 0 ? relevantOrders[0] : null;
   }, [relevantOrders, activeFulfillmentId, selectedInvoiceId]);
   const pickup = currentOrder ? isPickup(currentOrder) : false;
+  const activeOrder = useRef(currentOrder?.id_fulfillment);
+  activeOrder.current = currentOrder?.id_fulfillment;
+  const addressChanged = Boolean(isEditingAddress && currentOrder && (currentOrder.tgl_update || '') !== addressRevision);
   React.useEffect(() => { setActiveFulfillmentId(null); }, [selectedInvoiceId]);
 
-  // Set address form initial values when current order changes
+  const loadRecipient = () => {
+    if (!currentOrder) return;
+    setAddressForm({
+      nama_penerima: currentOrder.nama_penerima || currentUser?.nama_lengkap || '',
+      telp_penerima: currentOrder.telp_penerima || currentUser?.telp || '',
+      alamat_lengkap: currentOrder.alamat_lengkap || '',
+      kota: currentOrder.kota || '',
+      kode_pos: currentOrder.kode_pos || '',
+    });
+    setAddressRevision(currentOrder.tgl_update || '');
+  };
+
+  // Polling must not replace an address the participant is still editing.
   React.useEffect(() => {
     if (currentOrder) {
-      setAddressForm({
-        nama_penerima: currentOrder.nama_penerima || currentUser?.nama_lengkap || '',
-        telp_penerima: currentOrder.telp_penerima || currentUser?.telp || '',
-        alamat_lengkap: currentOrder.alamat_lengkap || '',
-        kota: currentOrder.kota || '',
-        kode_pos: currentOrder.kode_pos || '',
-      });
+      loadRecipient();
       setIsEditingAddress(currentOrder.id_user_pembeli === currentUser?.id_user && !recipientReady(currentOrder));
+      setActionMessage(null); setCopiedResi(false);
     }
-  }, [currentOrder?.id_fulfillment, currentOrder?.kurir, currentUser?.id_user]);
+  }, [currentOrder?.id_fulfillment, currentUser?.id_user]);
 
   if (!currentUser) {
     return (
@@ -115,6 +126,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
   const handleSaveAddress = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentOrder || isSaving) return;
+    if (addressChanged) { setActionFailed(true); setActionMessage('Pesanan telah berubah. Muat data penerima terbaru sebelum menyimpan.'); return; }
     if (
       !addressForm.nama_penerima.trim() ||
       !addressForm.telp_penerima.trim() ||
@@ -127,28 +139,32 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
       return;
     }
 
+    const orderId = currentOrder.id_fulfillment;
     setIsSaving(true);
-    const res = await updateFulfillmentAddress(currentOrder.id_fulfillment, addressForm);
+    const res = await updateFulfillmentAddress(orderId, { ...addressForm, expected_updated_at: addressRevision });
     setIsSaving(false);
+    if (activeOrder.current !== orderId) return;
     setActionFailed(!res.success);
     setActionMessage(res.message);
     if (res.success) setIsEditingAddress(false);
-    setTimeout(() => setActionMessage(null), 4000);
   };
 
   // Handle courier select
   const handleSelectCourier = async (courier: CourierOption) => {
     if (!currentOrder || isSaving) return;
+    const orderId = currentOrder.id_fulfillment;
     setIsSaving(true);
-    const res = await updateFulfillmentCourier(currentOrder.id_fulfillment, {
+    const res = await updateFulfillmentCourier(orderId, {
+      expected_updated_at: currentOrder.tgl_update || '',
       kurir: courier.name,
       layanan_kurir: courier.service,
       ongkir: courier.price,
     });
     setIsSaving(false);
+    if (activeOrder.current !== orderId) return;
+    if (res.success && res.updated_at) setAddressRevision(res.updated_at);
     setActionFailed(!res.success);
     setActionMessage(res.message);
-    setTimeout(() => setActionMessage(null), 4000);
   };
 
 
@@ -166,7 +182,6 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     setIsSaving(false);
     setActionFailed(!res.success);
     setActionMessage(res.message);
-    setTimeout(() => setActionMessage(null), 5000);
   };
 
 
@@ -232,7 +247,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
             {!actionFailed && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />}
             <span>{actionMessage}</span>
           </div>
-          <button onClick={() => setActionMessage(null)} className="text-muted-foreground hover:text-foreground text-xs font-bold">
+          <button type="button" aria-label="Tutup pesan pengiriman" onClick={() => setActionMessage(null)} className="focus-ring flex min-h-11 min-w-11 items-center justify-center text-muted-foreground hover:text-foreground text-xs font-bold">
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
@@ -275,6 +290,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
                   return (
                     <button
                       key={order.id_fulfillment}
+                      disabled={isSaving}
                       onClick={() => setActiveFulfillmentId(order.id_fulfillment)}
                       className={`px-4 py-2.5 rounded-xl border text-xs font-semibold flex items-center gap-2.5 transition cursor-pointer ${
                         isSelected
@@ -413,7 +429,8 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
                     </div>
                     {recipientReady(currentOrder) && currentOrder.id_user_pembeli === currentUser.id_user && !isEditingAddress && !currentOrder.legacy_historical && ['menunggu_alamat', 'dikemas'].includes(currentOrder.status) && currentOrder.shipping_payment_status !== 'paid_manual' && (
                       <button
-                        onClick={() => setIsEditingAddress(true)}
+                        onClick={() => { loadRecipient(); setIsEditingAddress(true); }}
+                        disabled={isSaving}
                         className="text-xs text-primary hover:underline font-semibold flex items-center gap-1"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
@@ -426,6 +443,10 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
 
                   {isEditingAddress && !currentOrder.legacy_historical ? (
                     <form onSubmit={handleSaveAddress} className="space-y-4 pt-2">
+                      <fieldset disabled={isSaving} className="min-w-0 space-y-4">
+                      {addressChanged && <div role="alert" className="space-y-2 border border-destructive p-3 text-sm text-destructive"><p>Pesanan telah berubah sejak formulir dibuka. Isianmu tetap disimpan di formulir sampai kamu memuat data terbaru.</p><button type="button" onClick={() => {
+                        if (window.confirm('Muat data penerima terbaru? Perubahan formulir yang belum disimpan akan diganti.')) loadRecipient();
+                      }} className="focus-ring min-h-11 font-semibold underline">Muat data penerima terbaru</button></div>}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                         <div className="space-y-1">
                           <label htmlFor="recipient-name" className="font-semibold text-foreground">Nama Penerima Lengkap *</label>
@@ -510,12 +531,13 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
                           </button>
                         )}
                         <button
-                          type="submit" disabled={isSaving}
-                          className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:opacity-90 shadow-sm cursor-pointer"
+                          type="submit" disabled={isSaving || addressChanged}
+                          className="px-6 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-semibold hover:opacity-90 shadow-sm cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           Simpan data penerima
                         </button>
                       </div>
+                      </fieldset>
                     </form>
                   ) : (
                     <div className="p-4 rounded-lg bg-muted/30 border border-border text-sm space-y-2">
@@ -591,6 +613,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
 
                   {/* Tracking Timeline */}
                   <div className="space-y-6 pt-2">
+                    {currentOrder.tracking_history.length === 0 && <p className="text-sm text-muted-foreground">Belum ada catatan pengiriman.</p>}
                     {currentOrder.tracking_history.map((hist, idx) => {
                       const isLatest = idx === 0;
                       return (

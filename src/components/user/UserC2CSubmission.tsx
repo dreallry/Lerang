@@ -3,6 +3,7 @@ import { useAuction } from '../../context/AuctionContext';
 import { LotPhotoInput } from '../common/LotPhotoInput';
 import { CategoryType } from '../../types';
 import { formatRupiah } from '../../utils/formatters';
+import { documentLinkError, itemRevision } from '../../utils/catalogData';
 import {
   FilePlus2,
   FileCheck,
@@ -36,6 +37,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
   const [activeTab, setActiveTab] = useState<'submit' | 'my-items'>('submit');
   const [editingBarangId, setEditingBarangId] = useState<number | null>(null);
+  const [editingRevision, setEditingRevision] = useState('');
 
   const [namaBarang, setNamaBarang] = useState('');
   const [kategori, setKategori] = useState<CategoryType>('Kendaraan');
@@ -65,12 +67,16 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
   }
 
   const myItems = barangList.filter((b) => b.id_user === currentUser.id_user);
+  const latestEditingItem = myItems.find(item => item.id_barang === editingBarangId);
+  const editingChanged = Boolean(editingBarangId && (!latestEditingItem || itemRevision(latestEditingItem) !== editingRevision));
 
   const handleAddDoc = () => {
-    if (newDocInput.trim()) {
-      setDocuments([...documents, newDocInput.trim()]);
-      setNewDocInput('');
-    }
+    const value = newDocInput.trim();
+    const error = documentLinkError(value, documents);
+    if (error) { setFeedback({ type: 'error', msg: error }); return; }
+    setDocuments([...documents, value]);
+    setNewDocInput('');
+    setFeedback(null);
   };
 
   const handleRemoveDoc = (idx: number) => {
@@ -91,6 +97,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
   const handleStartEdit = (item: (typeof barangList)[0]) => {
     setEditingBarangId(item.id_barang);
+    setEditingRevision(itemRevision(item));
     setNamaBarang(item.nama_barang);
     setKategori(item.kategori);
     setHargaAwal(String(item.harga_awal));
@@ -98,9 +105,8 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
     setDeskripsi(item.deskripsi_barang);
     setPhotoUrls(item.foto_barang.length > 0 ? item.foto_barang : []);
     setDocuments(item.dokumen_pendukung || []);
-    if (item.spesifikasi) {
-      setSpecs(Object.entries(item.spesifikasi).map(([key, val]) => ({ key, val })));
-    }
+    setSpecs(Object.entries(item.spesifikasi || {}).map(([key, val]) => ({ key, val })));
+    setNewDocInput(''); setNewSpecKey(''); setNewSpecVal('');
     setFeedback(null);
     setActiveTab('submit');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -108,6 +114,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
   const handleCancelEdit = () => {
     setEditingBarangId(null);
+    setEditingRevision('');
     setNamaBarang('');
     setHargaAwal('');
     setReservePrice('');
@@ -135,20 +142,21 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving || isUploadingPhoto) return;
+    if (editingChanged) { setFeedback({ type: 'error', msg: 'Data barang telah berubah. Muat versi terbaru sebelum mengajukan perbaikan.' }); return; }
     if (!namaBarang.trim()) {
       setFeedback({ type: 'error', msg: 'Mohon isi nama barang yang diajukan.' });
       return;
     }
 
     const priceNum = Number(hargaAwal);
-    if (!hargaAwal || isNaN(priceNum) || priceNum < 100000) {
+    if (!hargaAwal || !Number.isSafeInteger(priceNum) || priceNum < 100000) {
       setFeedback({ type: 'error', msg: 'Harga limit awal pembuka minimal Rp 100.000.' });
       return;
     }
 
     if (reservePrice) {
       const reserveNum = Number(reservePrice);
-      if (isNaN(reserveNum) || reserveNum < priceNum) {
+      if (!Number.isSafeInteger(reserveNum) || reserveNum < priceNum) {
         setFeedback({
           type: 'error',
           msg: 'Harga cadangan rahasia (reserve price) tidak boleh lebih rendah dari harga limit awal pembuka.',
@@ -173,6 +181,13 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
       return;
     }
 
+    if (newDocInput.trim() || newSpecKey.trim() || newSpecVal.trim()) {
+      setFeedback({ type: 'error', msg: 'Masih ada dokumen atau spesifikasi yang belum ditambahkan. Tambahkan ke daftar atau kosongkan kolomnya sebelum mengirim.' });
+      return;
+    }
+    const invalidDocument = documents.find((document, index) => documentLinkError(document, documents.slice(0, index)));
+    if (invalidDocument) { setFeedback({ type: 'error', msg: 'Tautan dokumen belum valid. Hapus nama dokumen lama lalu tambahkan tautan HTTP atau HTTPS yang sesuai.' }); return; }
+
     const specsObj: Record<string, string> = {};
     specs.forEach((s) => {
       specsObj[s.key] = s.val;
@@ -184,6 +199,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
     let res;
     if (editingBarangId) {
       res = await resubmitC2CItem(editingBarangId, {
+        expected_updated_at: editingRevision,
         nama_barang: namaBarang.trim(),
         kategori,
         harga_awal: priceNum,
@@ -191,7 +207,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
         foto_barang: photoUrls,
         dokumen_pendukung: documents,
         spesifikasi: specsObj,
-        reserve_price: reserveNum,
+        reserve_price: reserveNum ?? 0,
       });
     } else {
       res = await submitC2CItem({
@@ -217,6 +233,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
       setDocuments([]);
       setSpecs([]);
       setEditingBarangId(null);
+      setEditingRevision('');
       setActiveTab('my-items');
     } else {
       setFeedback({ type: 'error', msg: res.message });
@@ -262,7 +279,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
       </div>
 
       {feedback && (
-        <div
+        <div role={feedback.type === 'error' ? 'alert' : 'status'}
           className={`p-4 rounded-xl text-xs font-medium flex items-center gap-3 border ${
             feedback.type === 'success'
               ? 'bg-secondary text-foreground border-border'
@@ -282,11 +299,12 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
       {activeTab === 'submit' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           <form onSubmit={handleSubmit} className="lg:col-span-8 space-y-6">
+            <fieldset disabled={isSaving} className="min-w-0 space-y-6">
             {editingBarangId && (
               <div className="p-4 rounded-lg bg-muted border border-border flex items-center justify-between gap-4 text-sm">
                 <div className="flex items-center gap-2">
-                  <Pencil className="w-4 h-4 text-amber-500 shrink-0" />
-                  <span className="font-semibold text-amber-500">
+                  <Pencil className="w-4 h-4 text-primary shrink-0" />
+                  <span className="font-semibold text-primary">
                     Mode Perbaikan: Anda sedang memperbaiki pengajuan barang #{editingBarangId}
                   </span>
                 </div>
@@ -300,6 +318,12 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                 </button>
               </div>
             )}
+            {editingChanged && <div role="alert" className="space-y-2 border border-destructive p-4 text-sm text-destructive">
+              <p>Data barang telah berubah sejak formulir dibuka. Periksa versi terbaru agar perubahan orang lain tidak tertimpa.</p>
+              {latestEditingItem && <button type="button" disabled={isUploadingPhoto || isSaving} onClick={() => {
+                if (window.confirm('Muat data terbaru? Perubahan yang belum disimpan di formulir ini akan diganti.')) handleStartEdit(latestEditingItem);
+              }} className="focus-ring min-h-11 font-semibold underline">Muat data terbaru</button>}
+            </div>}
 
             {/* 1. Info Dasar */}
             <div className="p-5 sm:p-6 rounded-lg bg-card border border-border space-y-4">
@@ -308,9 +332,11 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
               </h2>
 
               <div>
-                <label className="text-xs font-medium text-foreground block mb-1">Nama Barang</label>
+                <label htmlFor="submission-name" className="text-xs font-medium text-foreground block mb-1">Nama Barang</label>
                 <input
                   type="text"
+                  id="submission-name"
+                  maxLength={200}
                   required
                   placeholder="Contoh: Honda PCX 160 ABS 2023 Merah Doff"
                   value={namaBarang}
@@ -321,8 +347,9 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">Kategori</label>
+                  <label htmlFor="submission-category" className="text-xs font-medium text-foreground block mb-1">Kategori</label>
                   <select
+                    id="submission-category"
                     value={kategori}
                     onChange={(e) => setKategori(e.target.value as CategoryType)}
                     className="w-full bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground focus:border-primary outline-none"
@@ -336,11 +363,12 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-foreground block mb-1">
+                  <label htmlFor="submission-price" className="text-xs font-medium text-foreground block mb-1">
                     Harga Mulai Lelang (Rp) <span className="text-destructive">*</span>
                   </label>
                   <input
                     type="number"
+                    id="submission-price"
                     required
                     min={100000}
                     placeholder="Min. 100.000"
@@ -352,13 +380,14 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
                 <div>
                   <div className="flex items-center justify-between mb-1">
-                    <label className="text-xs font-medium text-foreground">
+                    <label htmlFor="submission-reserve" className="text-xs font-medium text-foreground">
                       Harga Minimal Lepas
                     </label>
                     <span className="text-[10px] text-muted-foreground">Opsional</span>
                   </div>
                   <input
                     type="number"
+                    id="submission-reserve"
                     min={Number(hargaAwal) || 100000}
                     placeholder="Reserve price (rahasia)"
                     value={reservePrice}
@@ -370,12 +399,12 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
               <div>
                 <div className="flex justify-between items-center mb-1">
-                  <label className="text-xs font-medium text-foreground">
+                  <label htmlFor="submission-description" className="text-xs font-medium text-foreground">
                     Deskripsi & Kondisi <span className="text-destructive">*</span>
                   </label>
                   <span
                     className={`text-[10px] font-mono ${
-                      deskripsi.trim().length >= 50 ? 'text-emerald-500' : 'text-muted-foreground'
+                      deskripsi.trim().length >= 50 ? 'text-primary' : 'text-muted-foreground'
                     }`}
                   >
                     {deskripsi.trim().length}/50 karakter minimal
@@ -383,6 +412,8 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                 </div>
                 <textarea
                   rows={3}
+                  id="submission-description"
+                  maxLength={20000}
                   required
                   placeholder="Jelaskan kondisi fisik, riwayat servis, kelengkapan surat, minus/cacat jika ada (minimal 50 karakter)..."
                   value={deskripsi}
@@ -401,8 +432,8 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                     photoUrls.length >= 3
-                      ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20'
-                      : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'
+                      ? 'bg-secondary text-primary border border-border'
+                      : 'bg-muted text-muted-foreground border border-border'
                   }`}
                 >
                   {photoUrls.length}/3 Foto Wajib Terlampir
@@ -421,18 +452,24 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
               {/* Dokumen */}
               <div className="space-y-2">
-                <label className="text-xs text-muted-foreground block">Dokumen Kepemilikan</label>
+                <label htmlFor="submission-document" className="text-xs text-muted-foreground block">Tautan dokumen pendukung (opsional)</label>
+                <p className="text-xs leading-5 text-muted-foreground">Tambahkan tautan dokumen yang dapat diperiksa petugas. Daftar ini tidak tampil di katalog. Jangan mengunggah dokumen identitas melalui kolom foto barang.</p>
                 <div className="flex gap-2">
                   <input
                     type="text"
-                    placeholder="Contoh: STNK, BPKB Asli..."
+                    id="submission-document"
+                    inputMode="url"
+                    maxLength={4096}
+                    placeholder="https://contoh.com/dokumen.pdf"
                     value={newDocInput}
                     onChange={(e) => setNewDocInput(e.target.value)}
-                    className="flex-1 bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground focus:border-primary outline-none"
+                    onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); handleAddDoc(); } }}
+                    className="focus-ring min-w-0 flex-1 bg-card border border-border rounded-xl px-3 py-2 text-xs text-foreground"
                   />
                   <button
                     type="button"
                     onClick={handleAddDoc}
+                    disabled={!newDocInput.trim() || documents.length >= 12}
                     className="px-4 py-2 bg-muted text-foreground border border-border rounded-xl text-xs font-medium"
                   >
                     + Dokumen
@@ -443,7 +480,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                   {documents.map((doc, idx) => (
                     <span key={idx} className="px-3 py-1 bg-muted rounded-lg text-xs flex items-center gap-1.5 border border-border">
                       <FileCheck className="w-3.5 h-3.5 text-primary" />
-                      <span>{doc}</span>
+                      <span className="break-all">{doc}</span>
                       <button type="button" onClick={() => handleRemoveDoc(idx)} className="text-muted-foreground hover:text-destructive" aria-label="Hapus dokumen"><X className="h-4 w-4" aria-hidden="true" /></button>
                     </span>
                   ))}
@@ -456,6 +493,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   <input
                     type="text"
+                    aria-label="Nama spesifikasi"
                     placeholder="Label (misal: Tahun)"
                     value={newSpecKey}
                     onChange={(e) => setNewSpecKey(e.target.value)}
@@ -463,6 +501,7 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
                   />
                   <input
                     type="text"
+                    aria-label="Nilai spesifikasi"
                     placeholder="Nilai (misal: 2023)"
                     value={newSpecVal}
                     onChange={(e) => setNewSpecVal(e.target.value)}
@@ -493,11 +532,12 @@ export const UserC2CSubmission: React.FC<UserC2CSubmissionProps> = ({ onNavigate
 
             <button
               type="submit"
-              disabled={isSaving || isUploadingPhoto}
-              className="w-full py-3 px-6 rounded-xl bg-primary text-primary-foreground font-semibold text-xs border border-border hover:opacity-90 transition shadow-sm cursor-pointer"
+              disabled={isSaving || isUploadingPhoto || editingChanged}
+              className="w-full py-3 px-6 rounded-xl bg-primary text-primary-foreground font-semibold text-xs border border-border hover:opacity-90 transition shadow-sm cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             >
                       {isSaving ? 'Menyimpan...' : editingBarangId ? 'Simpan Perbaikan & Ajukan Ulang' : 'Kirim Pengajuan ke Tim Kurasi'}
             </button>
+            </fieldset>
           </form>
 
           {/* Right Column: Payout Simulation */}

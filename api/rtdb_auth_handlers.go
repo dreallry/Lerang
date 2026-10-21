@@ -60,8 +60,16 @@ func RegisterMasyarakatRTDB(w http.ResponseWriter, r *http.Request) {
 				if old == nil || !strings.EqualFold(stringValue(old["email"], ""), email) || node == "users" && oldUID == identity.UID {
 					continue
 				}
+				if node == "users" {
+					return domainError(409, "Email profil sudah terkait dengan akun lain. Hubungi pengelola untuk pemeriksaan identitas")
+				}
 				if !identity.EmailVerified {
 					return domainError(403, "Verifikasi email terlebih dahulu, lalu kirim ulang profil untuk menautkan akun lama")
+				}
+				for otherKey, otherValue := range treeMap(root["legacy_users"]) {
+					if otherKey != oldUID && strings.EqualFold(stringValue(treeMap(otherValue)["email"], ""), email) {
+						return domainError(409, "Email arsip terkait dengan beberapa profil. Hubungi pengelola untuk pemeriksaan identitas")
+					}
 				}
 				id := rtdbNumericID(old["id_user"])
 				if id <= 0 {
@@ -136,7 +144,11 @@ func MeRTDB(w http.ResponseWriter, r *http.Request) {
 	}
 	if claims.Role == RoleMasyarakat {
 		var profile map[string]interface{}
-		if err := rtdbGet(r.Context(), "users/"+claims.UID, &profile); err != nil || len(profile) == 0 {
+		if err := rtdbGet(r.Context(), "users/"+claims.UID, &profile); err != nil {
+			rtdbJSONError(w, err)
+			return
+		}
+		if len(profile) == 0 {
 			Error(w, http.StatusNotFound, "Profil masyarakat belum terdaftar")
 			return
 		}
@@ -145,7 +157,11 @@ func MeRTDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var profile map[string]interface{}
-	if err := rtdbGet(r.Context(), "staff/"+claims.UID, &profile); err != nil || len(profile) == 0 {
+	if err := rtdbGet(r.Context(), "staff/"+claims.UID, &profile); err != nil {
+		rtdbJSONError(w, err)
+		return
+	}
+	if len(profile) == 0 {
 		Error(w, http.StatusNotFound, "Profil petugas belum terdaftar")
 		return
 	}

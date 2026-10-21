@@ -40,7 +40,7 @@ func sessionCanChange(session map[string]interface{}, now time.Time) error {
 	return nil
 }
 
-func sessionLotCanChange(root, auction map[string]interface{}) error {
+func sessionLotCanChange(root, auction map[string]interface{}, now time.Time) error {
 	if auction == nil {
 		return domainError(http.StatusNotFound, "Lot lelang tidak ditemukan")
 	}
@@ -48,6 +48,17 @@ func sessionLotCanChange(root, auction map[string]interface{}) error {
 	status := stringValue(auction["status"], "")
 	if auction["legacy_historical"] == true || auction["settled_at"] != nil || (status != "draft" && status != "terjadwal") || rtdbNumericID(auction["id_user"]) > 0 || len(treeMap(treeMap(root["bids"])[id])) > 0 || len(treeMap(treeMap(root["holds"])[id])) > 0 {
 		return domainError(http.StatusConflict, "Lot yang sudah berjalan atau memiliki transaksi tidak dapat dipindahkan")
+	}
+	if status == "terjadwal" {
+		start, err := auctionTime(auction["tgl_mulai"])
+		if err != nil || !now.Before(start) {
+			return domainError(http.StatusConflict, "Jadwal lot sudah dimulai atau perlu diperiksa")
+		}
+	}
+	for _, value := range treeMap(root["invoices"]) {
+		if rtdbNumericID(treeMap(value)["id_lelang"]) == rtdbNumericID(auction["id_lelang"]) {
+			return domainError(http.StatusConflict, "Lot yang sudah memiliki tagihan tidak dapat diubah")
+		}
 	}
 	item := treeRecord(root, "items", rtdbPathID(rtdbNumericID(auction["id_barang"])))
 	if item == nil || item["status_verifikasi"] != "approved" {
@@ -78,7 +89,7 @@ func assignSessionLot(root map[string]interface{}, sessionID, auctionID, duratio
 		return err
 	}
 	auction := treeRecord(root, "auctions", rtdbPathID(auctionID))
-	if err := sessionLotCanChange(root, auction); err != nil {
+	if err := sessionLotCanChange(root, auction, now); err != nil {
 		return err
 	}
 	previousID := rtdbNumericID(auction["id_sesi"])
@@ -124,7 +135,7 @@ func createSessionInTree(root map[string]interface{}, req createSessionRequest, 
 			return nil, domainError(http.StatusBadRequest, "Daftar lot berisi ID tidak valid atau duplikat")
 		}
 		seen[id] = true
-		if err := sessionLotCanChange(root, treeRecord(root, "auctions", rtdbPathID(id))); err != nil {
+		if err := sessionLotCanChange(root, treeRecord(root, "auctions", rtdbPathID(id)), now); err != nil {
 			return nil, err
 		}
 	}
@@ -206,17 +217,18 @@ func RemoveSessionLotRTDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
-		if err := sessionCanChange(treeRecord(root, "sessions", rtdbPathID(id)), time.Now()); err != nil {
+		now := time.Now()
+		if err := sessionCanChange(treeRecord(root, "sessions", rtdbPathID(id)), now); err != nil {
 			return err
 		}
 		lot := treeRecord(root, "auctions", rtdbPathID(auctionID))
-		if err := sessionLotCanChange(root, lot); err != nil {
+		if err := sessionLotCanChange(root, lot, now); err != nil {
 			return err
 		}
 		if rtdbNumericID(lot["id_sesi"]) != id {
 			return domainError(http.StatusConflict, "Lot tidak terhubung dengan sesi ini")
 		}
-		lot["id_sesi"], lot["tgl_mulai"], lot["tgl_selesai"], lot["status"], lot["updated_at"] = nil, nil, nil, "draft", rtdbNow()
+		lot["id_sesi"], lot["tgl_mulai"], lot["tgl_selesai"], lot["status"], lot["updated_at"] = nil, nil, nil, "draft", now.UTC().Format(time.RFC3339Nano)
 		rebuildSessionLots(root, id)
 		return nil
 	}); err != nil {
@@ -248,7 +260,7 @@ func cancelSessionInTree(root map[string]interface{}, id int, now time.Time) err
 			continue
 		}
 		if upcoming {
-			if err := sessionLotCanChange(root, lot); err != nil {
+			if err := sessionLotCanChange(root, lot, now); err != nil {
 				return err
 			}
 			lot["id_sesi"], lot["tgl_mulai"], lot["tgl_selesai"], lot["status"], lot["updated_at"] = nil, nil, nil, "draft", now.UTC().Format(time.RFC3339Nano)

@@ -45,11 +45,60 @@ func publicItem(item map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+func checkItemRevision(item map[string]interface{}, expected *string) error {
+	if expected == nil {
+		return domainError(400, "Versi barang wajib disertakan. Muat ulang halaman sebelum menyimpan")
+	}
+	current := stringValue(item["updated_at"], stringValue(item["created_at"], stringValue(item["tanggal"], "")))
+	if *expected != current {
+		return domainError(409, "Barang sudah diubah atau diproses akun lain. Muat ulang dan periksa kembali sebelum menyimpan")
+	}
+	return nil
+}
+
 func validateItemData(item map[string]interface{}) error {
 	name, category := strings.TrimSpace(stringValue(item["nama_barang"], "")), stringValue(item["kategori"], "")
 	allowed := map[string]bool{"Kendaraan": true, "Elektronik & Gadget": true, "Properti": true, "Barang Mewah & Jam": true, "Koleksi & Seni": true, "Lainnya": true}
-	if name == "" || len(name) > 200 || !allowed[category] || !wholeRupiah(numberValue(item["harga_awal"]), 100000) || len(stringValue(item["deskripsi_barang"], "")) > 20000 || !wholeRupiah(numberValue(item["reserve_price"]), 0) {
+	opening, openingOK := storedRupiah(item["harga_awal"])
+	reserve, reserveOK := 0.0, true
+	if item["reserve_price"] != nil {
+		reserve, reserveOK = storedRupiah(item["reserve_price"])
+	}
+	if name == "" || len(name) > 200 || !allowed[category] || !openingOK || opening < 100000 || !validAuctionAmount(opening) || len(stringValue(item["deskripsi_barang"], "")) > 20000 || !reserveOK {
 		return domainError(400, "Nama, kategori, harga awal minimal Rp 100.000, atau harga cadangan belum valid")
+	}
+	if reserve > 0 && reserve < opening {
+		return domainError(400, "Harga cadangan tidak boleh lebih rendah dari harga awal")
+	}
+	if item["estimasi_pasar"] != nil {
+		if _, ok := storedRupiah(item["estimasi_pasar"]); !ok {
+			return domainError(400, "Estimasi pasar harus berupa nominal rupiah yang valid")
+		}
+	}
+	var specs map[string]interface{}
+	switch value := item["spesifikasi"].(type) {
+	case map[string]interface{}:
+		specs = value
+	case map[string]string:
+		specs = map[string]interface{}{}
+		for key, text := range value {
+			specs[key] = text
+		}
+	case nil:
+	default:
+		return domainError(400, "Spesifikasi harus berupa pasangan nama dan teks")
+	}
+	if len(specs) > 50 {
+		return domainError(400, "Maksimal 50 rincian spesifikasi per barang")
+	}
+	for key, value := range specs {
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(key) == "" || len(key) > 100 || len(text) > 2000 {
+			return domainError(400, "Nama spesifikasi maksimal 100 karakter dan nilainya harus berupa teks maksimal 2000 karakter")
+		}
+		if strings.ContainsAny(key, ".#$[]/") || strings.IndexFunc(key, func(char rune) bool { return char < 32 || char == 127 }) >= 0 {
+			return domainError(400, "Nama spesifikasi tidak boleh memuat titik, #, $, [, ], /, atau karakter kontrol")
+		}
 	}
 	for _, field := range []string{"foto_barang", "dokumen_pendukung"} {
 		var values []string
@@ -81,7 +130,7 @@ func validateItemData(item map[string]interface{}) error {
 			}
 		}
 	}
-	item["nama_barang"] = name
+	item["nama_barang"], item["harga_awal"], item["reserve_price"] = name, opening, reserve
 	return nil
 }
 
@@ -139,7 +188,11 @@ func GetDetailBarangRTDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var item map[string]interface{}
-	if err := rtdbGet(r.Context(), "items/"+rtdbPathID(id), &item); err != nil || len(item) == 0 || stringValue(item["status_verifikasi"], "approved") != "approved" {
+	if err := rtdbGet(r.Context(), "items/"+rtdbPathID(id), &item); err != nil {
+		rtdbJSONError(w, err)
+		return
+	}
+	if len(item) == 0 || stringValue(item["status_verifikasi"], "approved") != "approved" {
 		Error(w, 404, "Barang tidak ditemukan")
 		return
 	}
@@ -202,13 +255,21 @@ func updateItemInTree(root map[string]interface{}, claims *RTDBClaims, id string
 			return err
 		}
 	}
-	for key, value := range treeMap(root["auctions"]) {
+	expected, ok := req["expected_updated_at"].(string)
+	if !ok {
+		return checkItemRevision(item, nil)
+	}
+	if err := checkItemRevision(item, &expected); err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, value := range treeMap(root["auctions"]) {
 		auction := treeMap(value)
 		if rtdbNumericID(auction["id_barang"]) != rtdbNumericID(id) {
 			continue
 		}
-		if auction["legacy_historical"] == true || auction["settled_at"] != nil || auction["status"] == "dibuka" || len(treeMap(treeMap(root["bids"])[key])) > 0 || len(treeMap(treeMap(root["holds"])[key])) > 0 {
-			return domainError(409, "Barang yang sudah memiliki transaksi atau riwayat tidak dapat diubah")
+		if err := sessionLotCanChange(root, auction, now); err != nil {
+			return err
 		}
 	}
 	next := map[string]interface{}{}
@@ -231,8 +292,14 @@ func updateItemInTree(root map[string]interface{}, claims *RTDBClaims, id string
 	if claims.Role == RoleMasyarakat && status == "rejected" {
 		next["status_verifikasi"], next["catatan_kurasi"] = "pending", ""
 	}
-	next["updated_at"] = rtdbNow()
+	next["updated_at"] = now.UTC().Format(time.RFC3339Nano)
 	treeNode(root, "items")[id] = next
+	for _, value := range treeMap(root["auctions"]) {
+		auction := treeMap(value)
+		if rtdbNumericID(auction["id_barang"]) == rtdbNumericID(id) {
+			auction["harga_awal"], auction["reserve_price"], auction["updated_at"] = next["harga_awal"], next["reserve_price"], next["updated_at"]
+		}
+	}
 	return nil
 }
 
@@ -305,7 +372,10 @@ func ValidateBarangRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "ID barang tidak valid")
 		return
 	}
-	var req ValidasiBarangRequest
+	var req struct {
+		ValidasiBarangRequest
+		ExpectedUpdatedAt *string `json:"expected_updated_at"`
+	}
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, 400, "Format JSON tidak valid")
 		return
@@ -318,11 +388,14 @@ func ValidateBarangRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Nilai jaminan, kelipatan, atau cadangan belum valid")
 		return
 	}
-	now := time.Now()
 	err = rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		item := treeRecord(root, "items", rtdbPathID(id))
 		if item == nil {
 			return domainError(404, "Barang tidak ditemukan")
+		}
+		if err := checkItemRevision(item, req.ExpectedUpdatedAt); err != nil {
+			return err
 		}
 		state := stringValue(item["status_verifikasi"], "")
 		if state == req.Status {
@@ -336,6 +409,9 @@ func ValidateBarangRTDB(w http.ResponseWriter, r *http.Request) {
 		}
 		item["status_verifikasi"], item["catatan_kurasi"], item["updated_at"] = req.Status, strings.TrimSpace(req.CatatanKurasi), now.UTC().Format(time.RFC3339Nano)
 		if req.Status == "approved" {
+			if req.ReservePrice > 0 && req.ReservePrice < numberValue(item["harga_awal"]) {
+				return domainError(400, "Harga cadangan tidak boleh lebih rendah dari harga awal")
+			}
 			auctionID := nextTreeID(root, "auctions")
 			item["reserve_price"] = req.ReservePrice
 			treeNode(root, "auctions")[rtdbPathID(auctionID)] = map[string]interface{}{"id_lelang": auctionID, "id_barang": id, "id_petugas": rtdbClaimsFromRequest(r).ID, "status": "draft", "tgl_mulai": "", "tgl_selesai": "", "durasi_jam": 8, "kelipatan_minimal": req.KelipatanMinimal, "uang_jaminan": req.UangJaminan, "harga_awal": item["harga_awal"], "harga_akhir": 0, "id_user": nil, "reserve_price": req.ReservePrice, "is_reserve_met": false, "created_at": now.UTC().Format(time.RFC3339Nano)}

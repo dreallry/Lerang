@@ -51,6 +51,7 @@ func TestServerPhotoUploadPersistsAndServesOnlyPublicLotPhotos(t *testing.T) {
 	form.Close()
 	upload := httptest.NewRequest("POST", "/api/upload", &body)
 	upload.Header.Set("Content-Type", form.FormDataContentType())
+	upload = withRTDBClaims(upload, &RTDBClaims{UID: "photo-fixture", ID: 1, Role: RoleMasyarakat})
 	w := httptest.NewRecorder()
 	UploadFotoRTDB(w, upload)
 	var result struct {

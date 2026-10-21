@@ -49,13 +49,24 @@ func treeRecord(root map[string]interface{}, node, key string) map[string]interf
 	return treeMap(treeMap(root[node])[key])
 }
 
+var rtdbWriteGate = make(chan struct{}, 1)
+
 // shortcut: a root transaction keeps the existing cross-node schema atomic; split into a ledger when database size or contention requires it.
 func rtdbTransaction(ctx context.Context, fn func(map[string]interface{}) error) error {
+	select {
+	case rtdbWriteGate <- struct{}{}:
+		defer func() { <-rtdbWriteGate }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	ref, err := rtdbRef("")
 	if err != nil {
 		return err
 	}
-	return ref.Transaction(ctx, func(node firebaseDB.TransactionNode) (interface{}, error) {
+	err = ref.Transaction(ctx, func(node firebaseDB.TransactionNode) (interface{}, error) {
 		var root map[string]interface{}
 		if err := node.Unmarshal(&root); err != nil {
 			return nil, err
@@ -63,11 +74,38 @@ func rtdbTransaction(ctx context.Context, fn func(map[string]interface{}) error)
 		if root == nil {
 			root = map[string]interface{}{}
 		}
+		if claims, _ := ctx.Value(rtdbClaimsContextKey).(*RTDBClaims); claims != nil && claims.UID != "" {
+			if err := validateTransactionClaims(root, claims); err != nil {
+				return nil, err
+			}
+		}
 		if err := fn(root); err != nil {
 			return nil, err
 		}
 		return root, nil
 	})
+	if err == nil {
+		invalidatePublicReads()
+	}
+	return err
+}
+
+func validateTransactionClaims(root map[string]interface{}, claims *RTDBClaims) error {
+	staff := treeRecord(root, "staff", claims.UID)
+	if claims.Role == RoleMasyarakat {
+		if len(staff) == 0 && claims.ID > 0 && rtdbNumericID(treeRecord(root, "users", claims.UID)["id_user"]) == claims.ID {
+			return nil
+		}
+	} else {
+		level := 2
+		if claims.Role == RoleAdministrator {
+			level = 1
+		}
+		if (claims.Role == RoleAdministrator || claims.Role == RolePetugas) && staff["active"] == true && staff["uid"] == claims.UID && staff["role"] == string(claims.Role) && claims.ID > 0 && rtdbNumericID(staff["id_petugas"]) == claims.ID && rtdbNumericID(staff["id_level"]) == level {
+			return nil
+		}
+	}
+	return domainError(http.StatusForbidden, "Hak akses akun berubah. Muat ulang sesi sebelum melanjutkan")
 }
 
 func nextTreeID(root map[string]interface{}, node string) int {

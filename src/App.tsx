@@ -32,7 +32,7 @@ const AdminUserManagement = lazy(() => import('./components/admin/AdminUserManag
 const OperationsCenter = lazy(() => import('./components/admin/OperationsCenter').then((page) => ({ default: page.OperationsCenter })));
 
 const MainLayout: React.FC = () => {
-  const { currentRole, sessionStatus, reloadSession, accountDataStatus, reloadAccountData } = useAuction();
+  const { currentRole, sessionStatus, sessionRevision, setPollingView, reloadSession, accountDataStatus, reloadAccountData } = useAuction();
   const [currentView, setCurrentView] = useState<string>(() => window.location.hash.slice(1).split('?')[0] || 'catalog');
   const [selectedAuctionId, setSelectedAuctionId] = useState<number | null>(null);
   const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null);
@@ -40,6 +40,8 @@ const MainLayout: React.FC = () => {
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
   const [catalogSearch, setCatalogSearch] = useState('');
   const [catalogSearchRevision, setCatalogSearchRevision] = useState(0);
+
+  useEffect(() => { setPollingView(currentView); }, [currentView, setPollingView]);
 
   const parseHash = () => {
     const rawHash = window.location.hash.replace(/^#/, '');
@@ -204,7 +206,7 @@ const MainLayout: React.FC = () => {
         {currentView === 'auth-action' && <EmailActionPage />}
 
         {!['catalog', 'login', 'register', 'reset-password', 'auth-action'].includes(currentView) && (
-          <div className="site-container page-shell">
+          <div key={sessionRevision} className="site-container page-shell">
             {currentView === 'guide' && <AuctionGuide onNavigate={handleNavigate} />}
             {currentView === 'session-detail' && selectedSessionId && (
               <SesiDetailPage

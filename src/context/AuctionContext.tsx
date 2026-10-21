@@ -10,7 +10,7 @@ import { authErrorMessage } from '../utils/authErrors';
 import type { SessionStatus } from '../utils/authFlow';
 import { startPolling } from '../utils/polling';
 
-type ActionResult = { success: boolean; message: string; id_sesi?: number };
+type ActionResult = { success: boolean; message: string; id_sesi?: number; updated_at?: string };
 
 type PaymentConfirmation = { type: 'topup' | 'payment'; orderId: string };
 
@@ -20,6 +20,8 @@ interface AuctionContextType {
   currentUser: TbMasyarakat | null;
   currentOfficer: TbPetugas | null;
   sessionStatus: SessionStatus;
+  sessionRevision: number;
+  setPollingView: (view: string) => void;
   reloadSession: () => void;
   logout: () => Promise<void>;
 
@@ -92,6 +94,7 @@ interface AuctionContextType {
   resubmitC2CItem: (
     barangId: number,
     data: {
+      expected_updated_at: string;
       nama_barang: string;
       harga_awal: number;
       kategori: CategoryType;
@@ -107,6 +110,7 @@ interface AuctionContextType {
   approveC2CListing: (
     barangId: number,
     config: {
+      expected_updated_at: string;
       kelipatan_minimal: number;
       uang_jaminan: number;
       reserve_price?: number;
@@ -116,9 +120,9 @@ interface AuctionContextType {
   ) => Promise<ActionResult>;
   updateBarangInfo: (
     barangId: number,
-    data: Partial<Pick<TbBarang, 'nama_barang' | 'deskripsi_barang' | 'harga_awal' | 'kategori' | 'reserve_price'>>
+    data: Partial<Pick<TbBarang, 'nama_barang' | 'deskripsi_barang' | 'harga_awal' | 'kategori' | 'reserve_price'>> & { expected_updated_at: string }
   ) => Promise<ActionResult>;
-  rejectC2CListing: (barangId: number, reason: string) => Promise<ActionResult>;
+  rejectC2CListing: (barangId: number, reason: string, expectedUpdatedAt: string) => Promise<ActionResult>;
   createOfficerAuction: (
     barangData: Omit<TbBarang, 'id_barang' | 'tanggal' | 'status_verifikasi'>,
     lelangData: {
@@ -162,11 +166,12 @@ interface AuctionContextType {
 
   // Fulfillment & Ekspedisi
   fulfillmentList: FulfillmentOrder[];
-  recordShippingPayment: (id: string, data: { reference: string; amount: number; courier: string; service: string }) => Promise<ActionResult>;
+  recordShippingPayment: (id: string, data: { reference: string; amount: number; courier: string; service: string; expected_updated_at: string }) => Promise<ActionResult>;
   getFulfillmentByInvoice: (invoiceId: number) => FulfillmentOrder | undefined;
   updateFulfillmentAddress: (
     fulfillmentId: string,
     addressData: {
+      expected_updated_at: string;
       nama_penerima: string;
       telp_penerima: string;
       alamat_lengkap: string;
@@ -177,6 +182,7 @@ interface AuctionContextType {
   updateFulfillmentCourier: (
     fulfillmentId: string,
     courierData: {
+      expected_updated_at: string;
       kurir: string;
       layanan_kurir: string;
       ongkir: number;
@@ -186,7 +192,8 @@ interface AuctionContextType {
     fulfillmentId: string,
     nomorResi: string,
     status: FulfillmentStatus,
-    description?: string
+    description: string | undefined,
+    expectedUpdatedAt: string
   ) => Promise<ActionResult>;
   confirmFulfillmentReceived: (
     fulfillmentId: string,
@@ -224,6 +231,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [currentOfficerId, setCurrentOfficerId] = useState(0);
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('loading');
   const [sessionAttempt, setSessionAttempt] = useState(0);
+  const [pollingView, setPollingView] = useState(() => window.location.hash.slice(1).split('?')[0]);
   const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null);
   const [catalogStatus, setCatalogStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [accountDataStatus, setAccountDataStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
@@ -232,12 +240,14 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const catalogRequest = useRef(0);
   const accountRequest = useRef(0);
   const walletRequest = useRef(0);
+  const sessionVersion = useRef(0);
   const pendingMutations = useRef(new Set<string>());
 
   const currentUser = useMemo(() => masyarakatList.find(user => user.id_user === currentUserId) || null, [masyarakatList, currentUserId]);
   const currentOfficer = useMemo(() => petugasList.find(officer => officer.id_petugas === currentOfficerId) || null, [petugasList, currentOfficerId]);
 
   const clearSession = useCallback(() => {
+    sessionVersion.current++;
     accountRequest.current++; walletRequest.current++;
     setCurrentUserId(null); setCurrentOfficerId(0); setCurrentRole('masyarakat'); setMasyarakatList([]); setPetugasList([]);
     setPembayaranList([]); setTransactionsList([]); setNotificationsList([]); setFulfillmentList([]); setHeldDeposits({}); setAutoBids({}); setCourierOptions([]); setMidtransModal(null);
@@ -277,14 +287,14 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, []);
 
   const refreshFinancialData = useCallback(async (confirmation?: PaymentConfirmation): Promise<boolean> => {
-    const uid = auth.currentUser?.uid;
-    if (!uid || !currentUserId) return false;
+    const owner = auth.currentUser;
+    if (!owner || !currentUserId) return false;
     const request = ++walletRequest.current;
     const [invoiceResponse, walletResponse] = await Promise.all([api.getInvoices(), api.getWalletInfo()]);
     if (!Array.isArray(invoiceResponse?.data)) throw new Error('Respons tagihan tidak valid.');
     const invoices = invoiceResponse.data.map(normalizeInvoice);
     const wallet = normalizeWallet(walletResponse?.data, currentUserId);
-    if (auth.currentUser?.uid !== uid || request !== walletRequest.current) return false;
+    if (auth.currentUser !== owner || request !== walletRequest.current) return false;
     setPembayaranList(invoices);
     setTransactionsList(wallet.transactions);
     setHeldDeposits(wallet.heldDeposits);
@@ -297,8 +307,8 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   }, [currentUserId]);
 
   const loadAccount = useCallback(async () => {
-    const uid = auth.currentUser?.uid;
-    if (!uid || (!currentUserId && !currentOfficerId)) return;
+    const owner = auth.currentUser;
+    if (!owner || (!currentUserId && !currentOfficerId)) return;
     const request = ++accountRequest.current;
     const staff = currentRole !== 'masyarakat';
     try {
@@ -326,7 +336,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
         if (session.kind !== 'petugas') throw new Error('Daftar petugas tidak valid.');
         return session.profile;
       });
-      if (auth.currentUser?.uid !== uid || request !== accountRequest.current) return;
+      if (auth.currentUser !== owner || request !== accountRequest.current) return;
       setPrivateItems(privateItems);
       if (remoteAuctions) setStaffAuctionRows(remoteAuctions);
       if (remoteInvoices) setPembayaranList(remoteInvoices);
@@ -338,7 +348,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setAccountUpdatedAt(new Date().toISOString());
       setAccountDataStatus('ready');
     } catch (error) {
-      if (auth.currentUser?.uid === uid && request === accountRequest.current) {
+      if (auth.currentUser === owner && request === accountRequest.current) {
         if (error instanceof ApiError && [401, 403].includes(error.status)) {
           clearSession();
           setSessionStatus('error');
@@ -350,18 +360,20 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const reloadCatalog = useCallback(() => { setCatalogStatus('loading'); void loadCatalog().catch(() => {}); }, [loadCatalog]);
   const reloadAccountData = useCallback(() => { setAccountDataStatus('loading'); void loadAccount().catch(() => {}); }, [loadAccount]);
+  const catalogPollDelay = pollingView === 'auction-detail' ? 5000 : 30000;
+  const accountPollDelay = ['auction-detail', 'wallet', 'invoices', 'fulfillment'].includes(pollingView) ? 10000 : 30000;
 
   useEffect(() => {
-    const stop = startPolling(loadCatalog, 5000);
+    const stop = startPolling(loadCatalog, catalogPollDelay);
     return () => { stop(); catalogRequest.current++; };
-  }, [loadCatalog]);
+  }, [loadCatalog, catalogPollDelay]);
 
   useEffect(() => {
     if (!currentUserId && !currentOfficerId) { setAccountDataStatus('idle'); return; }
     setAccountDataStatus('loading');
-    const stop = startPolling(loadAccount, 10000);
+    const stop = startPolling(loadAccount, accountPollDelay);
     return () => { stop(); accountRequest.current++; walletRequest.current++; };
-  }, [loadAccount, currentUserId, currentOfficerId]);
+  }, [loadAccount, currentUserId, currentOfficerId, accountPollDelay]);
 
   const setMasyarakatSession = useCallback((profile: TbMasyarakat) => {
     setPrivateItems([]); setStaffAuctionRows([]); setHeldDeposits({}); setAutoBids({}); setPembayaranList([]); setTransactionsList([]); setFulfillmentList([]); setNotificationsList([]);
@@ -414,20 +426,21 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const getUserAutoBid = (lelangId: number, userId?: number) => autoBids[`${lelangId}_${userId || currentUserId}`] || null;
 
   const commit = async (key: string, operation: () => Promise<any>, message: string): Promise<ActionResult> => {
-    if (!auth.currentUser) return { success: false, message: 'Silakan masuk terlebih dahulu.' };
-    if (pendingMutations.current.has(key)) return { success: false, message: 'Permintaan yang sama masih diproses.' };
-    pendingMutations.current.add(key);
-    const uid = auth.currentUser.uid;
+    const owner = auth.currentUser;
+    if (!owner) return { success: false, message: 'Silakan masuk terlebih dahulu.' };
+    const mutationKey = `${sessionVersion.current}:${owner.uid}:${key}`;
+    if (pendingMutations.current.has(mutationKey)) return { success: false, message: 'Permintaan yang sama masih diproses.' };
+    pendingMutations.current.add(mutationKey);
     try {
       const response = await operation();
       if (!response?.success) throw new Error(response?.message || 'Server belum mengonfirmasi penyimpanan.');
-      if (auth.currentUser?.uid !== uid) return { success: true, message: 'Permintaan tersimpan. Sesi akun telah berubah.' };
+      if (auth.currentUser !== owner) return { success: false, message: 'Sesi akun berubah. Periksa hasil permintaan melalui akun yang mengirimkannya.' };
       const refreshed = await Promise.allSettled([loadCatalog(), loadAccount()]);
       const stale = refreshed.some(result => result.status === 'rejected');
-      return { success: true, message: `${response.message || message}${stale ? ' Data tersimpan, tetapi tampilan belum diperbarui. Muat ulang halaman untuk memeriksa hasilnya.' : ''}`, id_sesi: response.data?.id_sesi };
+      return { success: true, message: `${response.message || message}${stale ? ' Data tersimpan, tetapi tampilan belum diperbarui. Muat ulang halaman untuk memeriksa hasilnya.' : ''}`, id_sesi: response.data?.id_sesi, updated_at: response.data?.updated_at };
     } catch (error) {
       return { success: false, message: authErrorMessage(error) };
-    } finally { pendingMutations.current.delete(key); }
+    } finally { pendingMutations.current.delete(mutationKey); }
   };
 
   const lockDepositForAuction = (id: number) => commit(`deposit:${id}`, () => api.lockDeposit(id), 'Jaminan telah dikunci oleh server.');
@@ -445,7 +458,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const resubmitC2CItem: AuctionContextType['resubmitC2CItem'] = (id, data) => commit(`item:${id}`, () => api.updateBarang(id, data), 'Perbaikan tersimpan dan menunggu pemeriksaan ulang.');
   const cancelC2CSubmission = (id: number) => commit(`item:${id}`, () => api.cancelSubmission(id), 'Pengajuan dibatalkan.');
   const approveC2CListing: AuctionContextType['approveC2CListing'] = (id, config) => commit(`curation:${id}`, () => api.validasiBarang(id, { status: 'approved', catatan_kurasi: 'Disetujui kurator.', ...config }), 'Pengajuan disetujui dan lot masuk ke Lot Pool.');
-  const rejectC2CListing = (id: number, reason: string) => commit(`curation:${id}`, () => api.validasiBarang(id, { status: 'rejected', catatan_kurasi: reason }), 'Pengajuan ditolak.');
+  const rejectC2CListing: AuctionContextType['rejectC2CListing'] = (id, reason, expectedUpdatedAt) => commit(`curation:${id}`, () => api.validasiBarang(id, { status: 'rejected', catatan_kurasi: reason, expected_updated_at: expectedUpdatedAt }), 'Pengajuan ditolak.');
   const updateBarangInfo: AuctionContextType['updateBarangInfo'] = (id, data) => commit(`item:${id}`, () => api.updateBarang(id, data), 'Perubahan barang tersimpan.');
   const createOfficerAuction: AuctionContextType['createOfficerAuction'] = (item, auction) => commit('create-official', () => api.createOfficerAuction(item, auction), 'Lot resmi dibuat.');
   const updateAuctionStatus: AuctionContextType['updateAuctionStatus'] = (id, status) => commit(`auction-status:${id}`, () => api.updateAuctionStatus(id, status), 'Status lelang tersimpan.');
@@ -460,7 +473,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const getFulfillmentByInvoice = (id: number) => fulfillmentList.find(order => order.id_pembayaran === id);
   const updateFulfillmentAddress: AuctionContextType['updateFulfillmentAddress'] = (id, address) => commit(`fulfillment:${id}`, () => api.updateFulfillmentAddress(id, address), 'Alamat tersimpan.');
   const updateFulfillmentCourier: AuctionContextType['updateFulfillmentCourier'] = (id, courier) => commit(`fulfillment:${id}`, () => api.updateFulfillmentCourier(id, courier), 'Layanan pengiriman tersimpan.');
-  const updateFulfillmentTracking: AuctionContextType['updateFulfillmentTracking'] = (id, resi, status, description) => commit(`fulfillment:${id}`, () => api.updateFulfillmentResi(id, resi, status, description), 'Status pengiriman tersimpan.');
+  const updateFulfillmentTracking: AuctionContextType['updateFulfillmentTracking'] = (id, resi, status, description, expectedUpdatedAt) => commit(`fulfillment:${id}`, () => api.updateFulfillmentResi(id, resi, status, description, expectedUpdatedAt), 'Status pengiriman tersimpan.');
   const recordShippingPayment: AuctionContextType['recordShippingPayment'] = (id, data) => commit(`fulfillment:${id}`, () => api.recordShippingPayment(id, data), 'Bukti ongkir tercatat. Saldo dan tagihan lelang tidak diubah.');
   const confirmFulfillmentReceived = (id: string, rating: number, review: string) => commit(`fulfillment:${id}`, () => api.selesaikanOrder(id, rating, review), 'Penerimaan pesanan dan ulasan tersimpan.');
   const markNotificationAsRead = (id: string) => commit(`notification:${id}`, () => api.markNotifikasiRead(id), 'Notifikasi ditandai dibaca.');
@@ -469,7 +482,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const closeMidtransModal = () => setMidtransModal(null);
 
   const value: AuctionContextType = {
-    currentRole, currentUser, currentOfficer, sessionStatus, reloadSession, logout,
+    currentRole, currentUser, currentOfficer, sessionStatus, sessionRevision: sessionVersion.current, setPollingView, reloadSession, logout,
     masyarakatList, petugasList, barangList, lelangList, themesList, selectedThemeId, setSelectedThemeId, sesiLelangList,
     historyList, pembayaranList, transactionsList, notificationsList, getAuctionDetail, allJoinedAuctions, activeAuctions,
     catalogStatus, reloadCatalog, accountDataStatus, accountUpdatedAt, reloadAccountData,

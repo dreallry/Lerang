@@ -108,6 +108,7 @@ func TestSessionScheduleWorkerAndCancellationPersistTogether(t *testing.T) {
 func TestWithdrawalReviewRequiresStaffAndRefundsAtMostOnce(t *testing.T) {
 	now := time.Now()
 	root := lifecycleRoot(now)
+	treeNode(root, "staff")["officer"] = map[string]interface{}{"uid": "officer", "id_petugas": 5, "id_level": 2, "role": string(RolePetugas), "active": true}
 	id, err := requestWithdrawal(root, lifecycleClaims(1, "alice", now), withdrawRequest{Amount: 100000, Bank: "Fixture", Account: "1234567890", Holder: "Fixture", RequestID: "123e4567-e89b-42d3-a456-426614174000"}, now)
 	requireNoError(t, err)
 	snapshot := paymentRTDBFixture(t, root)
@@ -117,10 +118,10 @@ func TestWithdrawalReviewRequiresStaffAndRefundsAtMostOnce(t *testing.T) {
 		want   int
 	}{
 		{lifecycleClaims(1, "alice", now), `{"status":"rejected","reason":"fixture"}`, 403},
-		{&RTDBClaims{UID: "officer", Role: RolePetugas}, `{"status":"paid"}`, 400},
-		{&RTDBClaims{UID: "officer", Role: RolePetugas}, `{"status":"rejected","reason":"fixture"}`, 200},
-		{&RTDBClaims{UID: "officer", Role: RolePetugas}, `{"status":"rejected","reason":"fixture"}`, 200},
-		{&RTDBClaims{UID: "officer", Role: RolePetugas}, `{"status":"paid","reference":"fixture-transfer"}`, 409},
+		{&RTDBClaims{ID: 5, UID: "officer", Role: RolePetugas}, `{"status":"paid"}`, 400},
+		{&RTDBClaims{ID: 5, UID: "officer", Role: RolePetugas}, `{"status":"rejected","reason":"fixture"}`, 200},
+		{&RTDBClaims{ID: 5, UID: "officer", Role: RolePetugas}, `{"status":"rejected","reason":"fixture"}`, 200},
+		{&RTDBClaims{ID: 5, UID: "officer", Role: RolePetugas}, `{"status":"paid","reference":"fixture-transfer"}`, 409},
 	} {
 		w := httptest.NewRecorder()
 		ReviewWithdrawalRTDB(w, operationRequest("POST", test.body, id, test.claims))

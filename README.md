@@ -98,6 +98,16 @@ Uploads use Firebase Storage when available; otherwise, `PHOTO_UPLOAD_DIR=upload
 
 Server storage is capped at 500 MB. Removing a photo from a form keeps its file on disk; clean up unused files during maintenance. Back up photos with RTDB data.
 
+Uploads allow four files in progress across the API process and one per account. Busy requests return a retry message before reading the file.
+
+## Data consistency
+
+Go serializes writes within one API process and uses Firebase ETags for atomic updates across related records. Access is checked again against the transaction snapshot. Stale item edits, curation decisions, and shipping quotes require a reload before they can be saved.
+
+Concurrent catalog reads share a short, 250 ms cache. Identity and financial reads bypass it; writes invalidate it. Polling pauses while offline or hidden and refreshes on return.
+
+Local fixture tests cover 100 concurrent transactions and deposit locks. They do not establish production capacity: writes still transact at the RTDB root, so larger datasets or multiple API instances need further load testing and a narrower transaction model.
+
 ## Checks and builds
 
 ```sh

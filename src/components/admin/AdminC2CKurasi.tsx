@@ -3,6 +3,7 @@ import { useAuction } from '../../context/AuctionContext';
 import { TbBarang, CategoryType } from '../../types';
 import { AdminDialog } from '../common/AdminDialog';
 import { formatRupiah } from '../../utils/formatters';
+import { itemRevision } from '../../utils/catalogData';
 import {
   FileCheck2,
   CheckCircle2,
@@ -81,6 +82,13 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
   // Pending C2C items
   const pendingItems = barangList.filter((b) => b.status_verifikasi === 'pending' && b.id_user !== null);
   const allCuratedItems = barangList.filter((b) => b.id_user !== null);
+  const latestSelected = selectedBarang && barangList.find((item) => item.id_barang === selectedBarang.id_barang);
+  const selectedChanged = Boolean(selectedBarang && (!latestSelected || itemRevision(latestSelected) !== itemRevision(selectedBarang)));
+  const staleNotice = selectedChanged ? (
+    <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
+      Barang ini telah diubah atau diproses. Tutup formulir lalu buka kembali untuk memeriksa versi terbaru.
+    </p>
+  ) : null;
 
   // Pagination calculation
   const totalPages = Math.ceil(allCuratedItems.length / ITEMS_PER_PAGE) || 1;
@@ -127,7 +135,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
   const handleExecuteApprove = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving) return;
+    if (!selectedBarang || isSaving || selectedChanged) return;
 
     const kelipatanNum = Number(kelipatan);
     const jaminanNum = Number(uangJaminan);
@@ -153,6 +161,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
     setIsSaving(true);
     const res = await approveC2CListing(selectedBarang.id_barang, {
+      expected_updated_at: itemRevision(selectedBarang),
       kelipatan_minimal: kelipatanNum,
       uang_jaminan: jaminanNum,
       reserve_price: reserveNum,
@@ -170,7 +179,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
   const handleExecuteReject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving) return;
+    if (!selectedBarang || isSaving || selectedChanged) return;
 
     if (!rejectReason.trim()) {
       setToast({ type: 'error', message: 'Mohon tuliskan alasan penolakan secara jelas.' });
@@ -178,7 +187,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
     }
 
     setIsSaving(true);
-    const res = await rejectC2CListing(selectedBarang.id_barang, rejectReason.trim());
+    const res = await rejectC2CListing(selectedBarang.id_barang, rejectReason.trim(), itemRevision(selectedBarang));
     setIsSaving(false);
     if (res.success) {
       setToast({ type: 'success', message: res.message });
@@ -191,7 +200,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
   const handleExecuteEditMinor = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving) return;
+    if (!selectedBarang || isSaving || selectedChanged) return;
 
     if (!editNama.trim()) {
       setToast({ type: 'error', message: 'Nama barang tidak boleh kosong.' });
@@ -206,10 +215,11 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
     setIsSaving(true);
     const res = await updateBarangInfo(selectedBarang.id_barang, {
+      expected_updated_at: itemRevision(selectedBarang),
       nama_barang: editNama.trim(),
       kategori: editKategori,
       harga_awal: hargaNum,
-      reserve_price: editReservePrice ? Number(editReservePrice) : undefined,
+      reserve_price: editReservePrice.trim() ? Number(editReservePrice) : 0,
       deskripsi_barang: editDeskripsi.trim(),
     });
 
@@ -224,7 +234,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               nama_barang: editNama.trim(),
               kategori: editKategori,
               harga_awal: hargaNum,
-              reserve_price: editReservePrice ? Number(editReservePrice) : undefined,
+              reserve_price: editReservePrice.trim() ? Number(editReservePrice) : 0,
               deskripsi_barang: editDeskripsi.trim(),
             }
           : null
@@ -524,6 +534,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
             </div>
 
             {/* Photo Preview */}
+            {staleNotice}
             <div className="space-y-2">
               <div className="h-60 w-full rounded-lg overflow-hidden bg-muted border border-border">
                 <img
@@ -584,23 +595,26 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
             <div className="flex gap-2">
               <button
                 type="button"
+                disabled={selectedChanged}
                 onClick={() => handleOpenEditMinor(selectedBarang)}
-                className="py-2.5 px-4 bg-muted hover:bg-card border border-border text-foreground rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                className="py-2.5 px-4 bg-muted hover:bg-card border border-border text-foreground rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Pencil className="w-3.5 h-3.5 text-amber-500" />
                 <span>Koreksi Typo</span>
               </button>
               <button
                 type="button"
+                disabled={selectedChanged}
                 onClick={() => setModalMode('reject')}
-                className="flex-1 py-2.5 bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/30 rounded-xl text-xs font-bold cursor-pointer"
+                className="flex-1 py-2.5 bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/30 rounded-xl text-xs font-bold cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Tolak Pengajuan
               </button>
               <button
                 type="button"
+                disabled={selectedChanged}
                 onClick={() => setModalMode('approve')}
-                className="flex-1 py-2.5 bg-primary text-primary-foreground border border-border rounded-xl text-xs font-bold hover:opacity-90 cursor-pointer"
+                className="flex-1 py-2.5 bg-primary text-primary-foreground border border-border rounded-xl text-xs font-bold hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Lanjut Setujui (Lot Pool)
               </button>
@@ -627,6 +641,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
             </div>
 
             {/* Explanatory callout for session scheduling */}
+            {staleNotice}
             <div className="p-3 rounded-xl bg-primary/10 border border-primary/20 text-xs space-y-1">
               <div className="flex items-center gap-1.5 font-bold text-foreground">
                 <Inbox className="w-4 h-4 text-primary" />
@@ -696,8 +711,8 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving}
-                className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 flex items-center justify-center gap-1.5 cursor-pointer"
+                type="submit" disabled={isSaving || selectedChanged}
+                className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>Setujui ke Lot Pool</span>
@@ -724,6 +739,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </button>
             </div>
 
+            {staleNotice}
             <div>
               <label className="text-xs font-bold text-foreground block mb-1">
                 Alasan Penolakan (Akan Dikirim ke User)
@@ -747,8 +763,8 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving}
-                className="w-2/3 py-2.5 bg-destructive text-destructive-foreground rounded-xl text-xs font-bold border border-border hover:opacity-90 cursor-pointer"
+                type="submit" disabled={isSaving || selectedChanged}
+                className="w-2/3 py-2.5 bg-destructive text-destructive-foreground rounded-xl text-xs font-bold border border-border hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Kirim Penolakan
               </button>
@@ -777,6 +793,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </button>
             </div>
 
+            {staleNotice}
             <div className="space-y-3 text-xs">
               <div>
                 <label className="text-foreground font-bold block mb-1">Nama Barang</label>
@@ -853,8 +870,8 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving}
-                className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 cursor-pointer"
+                type="submit" disabled={isSaving || selectedChanged}
+                className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Simpan Perubahan
               </button>

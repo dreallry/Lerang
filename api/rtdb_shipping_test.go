@@ -12,6 +12,7 @@ func shippingFixture(t *testing.T) (func() map[string]interface{}, *RTDBClaims, 
 	t.Helper()
 	now := time.Now()
 	root := lifecycleRoot(now)
+	treeNode(root, "staff")["fixture-officer"] = map[string]interface{}{"uid": "fixture-officer", "id_petugas": 5, "id_level": 2, "role": string(RolePetugas), "active": true}
 	buyer := lifecycleClaims(1, "alice", now)
 	requireNoError(t, lockAuctionHold(root, buyer, "1", now))
 	requireNoError(t, placeTreeBid(root, buyer, "1", 100000, now))
@@ -22,12 +23,69 @@ func shippingFixture(t *testing.T) (func() map[string]interface{}, *RTDBClaims, 
 
 func shippingCall(t *testing.T, handler http.HandlerFunc, claims *RTDBClaims, body map[string]interface{}, want int) {
 	t.Helper()
-	payload, err := json.Marshal(body)
+	requestBody := map[string]interface{}{}
+	for key, value := range body {
+		requestBody[key] = value
+	}
+	if _, finish := body["rating"]; !finish && body["expected_updated_at"] == nil {
+		var order map[string]interface{}
+		requireNoError(t, rtdbGet(t.Context(), "fulfillments/FUL-1", &order))
+		requestBody["expected_updated_at"] = stringValue(order["tgl_update"], "")
+	}
+	payload, err := json.Marshal(requestBody)
 	requireNoError(t, err)
 	w := httptest.NewRecorder()
 	handler(w, operationRequest("POST", string(payload), "FUL-1", claims))
 	if w.Code != want {
 		t.Fatalf("shipping status=%d want=%d: %s", w.Code, want, w.Body)
+	}
+}
+
+func TestShippingMutationsRejectAStaleDestinationSnapshot(t *testing.T) {
+	snapshot, buyer, staff := shippingFixture(t)
+	shippingCall(t, UpdateFulfillmentAddressRTDB, buyer, shippingAddress(), 200)
+	oldVersion := stringValue(treeRecord(snapshot(), "fulfillments", "FUL-1")["tgl_update"], "")
+	changed := shippingAddress()
+	changed["kota"] = "New fixture destination"
+	shippingCall(t, UpdateFulfillmentAddressRTDB, buyer, changed, 200)
+	for _, tc := range []struct {
+		handler http.HandlerFunc
+		body    map[string]interface{}
+	}{
+		{UpdateFulfillmentAddressRTDB, shippingAddress()},
+		{UpdateFulfillmentCourierRTDB, shippingQuote()},
+		{UpdateFulfillmentResiRTDB, map[string]interface{}{"status": "dikemas", "deskripsi": "Stale fixture instruction"}},
+		{RecordShippingPaymentRTDB, map[string]interface{}{"reference": "FIXTURE-OLD-RECEIPT", "amount": 25000, "courier": "Fixture courier", "service": "Fixture service"}},
+	} {
+		tc.body["expected_updated_at"] = oldVersion
+		shippingCall(t, tc.handler, staff, tc.body, 409)
+	}
+	order := treeRecord(snapshot(), "fulfillments", "FUL-1")
+	if order["kota"] != "New fixture destination" || order["kurir"] != nil || order["shipping_payment_status"] != nil {
+		t.Fatal("stale staff forms restored an old destination or fee")
+	}
+	quote := shippingQuote()
+	quote["expected_updated_at"] = stringValue(order["tgl_update"], "")
+	payload, err := json.Marshal(quote)
+	requireNoError(t, err)
+	w := httptest.NewRecorder()
+	UpdateFulfillmentCourierRTDB(w, operationRequest("POST", string(payload), "FUL-1", staff))
+	var response struct {
+		Data struct {
+			UpdatedAt string `json:"updated_at"`
+		} `json:"data"`
+	}
+	requireNoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	order = treeRecord(snapshot(), "fulfillments", "FUL-1")
+	if w.Code != 200 || response.Data.UpdatedAt == "" || response.Data.UpdatedAt != order["tgl_update"] || order["kurir"] != "Fixture courier" {
+		t.Fatalf("fresh quote did not return its committed revision: %d %s", w.Code, w.Body)
+	}
+	w = httptest.NewRecorder()
+	missing, err := json.Marshal(shippingQuote())
+	requireNoError(t, err)
+	UpdateFulfillmentCourierRTDB(w, operationRequest("POST", string(missing), "FUL-1", staff))
+	if w.Code != 400 {
+		t.Fatal("omitting a version bypassed shipping concurrency protection")
 	}
 }
 

@@ -79,7 +79,7 @@ func TestLegacyProfileRequiresVerifiedEmailAndPreservesBalances(t *testing.T) {
 	for _, verified := range []bool{false, true} {
 		t.Run(map[bool]string{false: "unverified", true: "verified"}[verified], func(t *testing.T) {
 			profile := map[string]interface{}{"id_user": 7, "email": "fixture@example.invalid", "saldo_wallet": 450000, "saldo_hold": 150000}
-			written := fixtureRTDB(t, map[string]interface{}{"/users.json": map[string]interface{}{"old-uid": profile}}, "")
+			written := fixtureRTDB(t, map[string]interface{}{"/legacy_users.json": map[string]interface{}{"7": profile}}, "")
 			w := httptest.NewRecorder()
 			RegisterMasyarakatRTDB(w, registrationRequest(verified))
 			if !verified {
@@ -95,8 +95,25 @@ func TestLegacyProfileRequiresVerifiedEmailAndPreservesBalances(t *testing.T) {
 			if saved["id_user"] != float64(7) || saved["saldo_wallet"] != float64(450000) || saved["saldo_hold"] != float64(150000) || treeMap((*written)["user_ids"])["7"] != "new-uid" {
 				t.Fatalf("legacy balances or ID changed: %v", *written)
 			}
-			if treeRecord(*written, "users", "old-uid") != nil {
+			if treeRecord(*written, "legacy_users", "7") != nil {
 				t.Fatal("old UID must be detached in the same update")
+			}
+		})
+	}
+}
+
+func TestProfileReadFailureIsNotReportedAsMissingAccount(t *testing.T) {
+	for _, role := range []UserRole{RoleMasyarakat, RolePetugas} {
+		t.Run(string(role), func(t *testing.T) {
+			node := "users"
+			if role == RolePetugas {
+				node = "staff"
+			}
+			fixtureRTDB(t, nil, "/"+node+"/fixture-uid.json")
+			w := httptest.NewRecorder()
+			MeRTDB(w, withRTDBClaims(httptest.NewRequest(http.MethodGet, "/api/auth/me", nil), &RTDBClaims{UID: "fixture-uid", Role: role}))
+			if w.Code != 500 || strings.Contains(w.Body.String(), "belum terdaftar") {
+				t.Fatalf("transient database error was reported as missing account: %d %s", w.Code, w.Body)
 			}
 		})
 	}
@@ -133,8 +150,14 @@ func TestItemUpdateResubmissionAndOwnership(t *testing.T) {
 		{"staff can edit a participant item", "approved", 7, 8, RolePetugas, 200},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			written := fixtureRTDB(t, map[string]interface{}{"/items/4.json": map[string]interface{}{"id_barang": 4, "id_user": tc.owner, "status_verifikasi": tc.status, "nama_barang": "Fixture", "kategori": "Koleksi & Seni", "harga_awal": 100000}}, "")
-			r := httptest.NewRequest(http.MethodPut, "/api/barang/4", strings.NewReader(`{"nama_barang":"Revisi fixture","harga_awal":150000,"id_user":999,"status_verifikasi":"approved"}`))
+			records := map[string]interface{}{"/items/4.json": map[string]interface{}{"id_barang": 4, "id_user": tc.owner, "status_verifikasi": tc.status, "nama_barang": "Fixture", "kategori": "Koleksi & Seni", "harga_awal": 100000}}
+			if tc.role == RoleMasyarakat {
+				records["/users/fixture-uid.json"] = map[string]interface{}{"id_user": tc.actor}
+			} else {
+				records["/staff/fixture-uid.json"] = map[string]interface{}{"uid": "fixture-uid", "id_petugas": tc.actor, "id_level": 2, "role": string(tc.role), "active": true}
+			}
+			written := fixtureRTDB(t, records, "")
+			r := httptest.NewRequest(http.MethodPut, "/api/barang/4", strings.NewReader(`{"nama_barang":"Revisi fixture","harga_awal":150000,"id_user":999,"status_verifikasi":"approved","expected_updated_at":""}`))
 			r.SetPathValue("id", "4")
 			r = withRTDBClaims(r, &RTDBClaims{ID: tc.actor, UID: "fixture-uid", Role: tc.role})
 			w := httptest.NewRecorder()

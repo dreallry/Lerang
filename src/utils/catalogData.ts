@@ -31,6 +31,21 @@ export function normalizeBarang(data: Record<string, unknown>): TbBarang {
   } as TbBarang;
 }
 
+export function itemRevision(item: Pick<TbBarang, 'updated_at' | 'created_at' | 'tanggal'>): string {
+  return item.updated_at || item.created_at || item.tanggal || '';
+}
+
+export function documentLinkError(value: string, existing: string[]): string {
+  if (existing.length >= 12) return 'Maksimal 12 tautan dokumen per barang.';
+  try {
+    const url = new URL(value);
+    if (value.length > 4096 || !/^https?:\/\//i.test(value) || !['https:', 'http:'].includes(url.protocol) || !url.hostname || url.username || url.password) throw new Error();
+  } catch {
+    return 'Masukkan tautan dokumen HTTP atau HTTPS, bukan nama dokumen.';
+  }
+  return existing.includes(value) ? 'Tautan dokumen ini sudah ditambahkan.' : '';
+}
+
 export function normalizeLelang(value: Record<string, unknown>): TbLelang {
   const data = value.lelang && typeof value.lelang === 'object' ? value.lelang as Record<string, unknown> : value;
   return {

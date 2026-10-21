@@ -44,7 +44,7 @@ export const MidtransSnapModal: React.FC = () => {
     let cached = attempts.current.get(key) || '';
     try { cached = sessionStorage.getItem(key) || cached; } catch { /* The in-memory ID still prevents repeated requests in this tab. */ }
     const id = midtransModal.type === 'topup'
-      ? midtransModal.refId || topUpRequestId(midtransModal.amount, transactionsList, cached, () => window.crypto?.randomUUID?.() || '') : '';
+      ? topUpRequestId(midtransModal.amount, transactionsList, midtransModal.refId || cached, () => window.crypto?.randomUUID?.() || '') : '';
     if (id) {
       attempts.current.set(key, id);
       try { sessionStorage.setItem(key, id); } catch { /* The server ledger also retains pending request IDs. */ }

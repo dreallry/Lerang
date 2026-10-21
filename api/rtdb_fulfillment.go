@@ -59,7 +59,34 @@ func fulfillmentInvoice(root map[string]interface{}, id string) (map[string]inte
 	if rtdbNumericID(invoice["id_user"]) != rtdbNumericID(order["id_user_pembeli"]) || rtdbNumericID(invoice["id_barang"]) != rtdbNumericID(order["id_barang"]) || rtdbNumericID(invoice["id_lelang"]) != rtdbNumericID(order["id_lelang"]) {
 		return nil, nil, domainError(409, "Relasi pengiriman dan tagihan perlu diperiksa")
 	}
+	item := treeRecord(root, "items", rtdbPathID(rtdbNumericID(order["id_barang"])))
+	if item == nil || rtdbNumericID(order["id_user_penjual"]) != rtdbNumericID(invoice["id_user_penjual"]) || rtdbNumericID(order["id_user_penjual"]) != rtdbNumericID(item["id_user"]) {
+		return nil, nil, domainError(409, "Identitas penjual pada barang dan tagihan perlu diperiksa")
+	}
+	if escrow := stringValue(invoice["escrow_status"], ""); escrow != "held" && escrow != "released" {
+		return nil, nil, domainError(409, "Pencatatan dana pembayaran perlu diperiksa pengelola")
+	}
 	return order, invoice, nil
+}
+
+func completeShippingRecipient(order map[string]interface{}) bool {
+	for _, field := range []string{"nama_penerima", "telp_penerima", "alamat_lengkap", "kota"} {
+		if strings.TrimSpace(stringValue(order[field], "")) == "" {
+			return false
+		}
+	}
+	code := stringValue(order["kode_pos"], "")
+	return len(code) == 5 && strings.Trim(code, "0123456789") == ""
+}
+
+func checkFulfillmentRevision(order map[string]interface{}, expected *string) error {
+	if expected == nil {
+		return domainError(400, "Versi pengiriman wajib disertakan. Muat ulang data sebelum menyimpan")
+	}
+	if *expected != stringValue(order["tgl_update"], "") {
+		return domainError(409, "Data pengiriman sudah berubah. Muat ulang dan periksa penerima, tujuan, serta ongkir sebelum menyimpan kembali")
+	}
+	return nil
 }
 
 func appendTracking(order map[string]interface{}, status, description string, now time.Time) {
@@ -73,11 +100,12 @@ func appendTracking(order map[string]interface{}, status, description string, no
 
 func UpdateFulfillmentAddressRTDB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Nama   string `json:"nama_penerima"`
-		Telp   string `json:"telp_penerima"`
-		Alamat string `json:"alamat_lengkap"`
-		Kota   string `json:"kota"`
-		Kode   string `json:"kode_pos"`
+		Nama              string  `json:"nama_penerima"`
+		Telp              string  `json:"telp_penerima"`
+		Alamat            string  `json:"alamat_lengkap"`
+		Kota              string  `json:"kota"`
+		Kode              string  `json:"kode_pos"`
+		ExpectedUpdatedAt *string `json:"expected_updated_at"`
 	}
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, 400, "Format JSON tidak valid")
@@ -88,8 +116,10 @@ func UpdateFulfillmentAddressRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Nama, telepon, alamat, kota, dan kode pos 5 digit wajib diisi dengan benar")
 		return
 	}
-	claims, id, now := rtdbClaimsFromRequest(r), r.PathValue("id"), time.Now()
+	claims, id := rtdbClaimsFromRequest(r), r.PathValue("id")
+	var updatedAt string
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		order, _, err := fulfillmentInvoice(root, id)
 		if err != nil {
 			return err
@@ -97,6 +127,10 @@ func UpdateFulfillmentAddressRTDB(w http.ResponseWriter, r *http.Request) {
 		if claims.Role == RoleMasyarakat && rtdbNumericID(order["id_user_pembeli"]) != claims.ID {
 			return domainError(403, "Hanya pembeli yang dapat mengisi alamat")
 		}
+		if err := checkFulfillmentRevision(order, req.ExpectedUpdatedAt); err != nil {
+			return err
+		}
+		defer func() { updatedAt = stringValue(order["tgl_update"], "") }()
 		state := stringValue(order["status"], "")
 		if state != "menunggu_alamat" && state != "dikemas" {
 			return domainError(409, "Alamat tidak dapat diubah setelah barang dikirim")
@@ -122,7 +156,7 @@ func UpdateFulfillmentAddressRTDB(w http.ResponseWriter, r *http.Request) {
 		rtdbJSONError(w, err)
 		return
 	}
-	JSON(w, 200, Response{Success: true, Message: "Alamat pengiriman tersimpan"})
+	JSON(w, 200, Response{Success: true, Message: "Alamat pengiriman tersimpan", Data: map[string]interface{}{"updated_at": updatedAt}})
 }
 
 func ListCouriersRTDB(w http.ResponseWriter, r *http.Request) {
@@ -131,21 +165,24 @@ func ListCouriersRTDB(w http.ResponseWriter, r *http.Request) {
 
 func UpdateFulfillmentCourierRTDB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Kurir   string  `json:"kurir"`
-		Layanan string  `json:"layanan_kurir"`
-		Ongkir  float64 `json:"ongkir"`
+		Kurir             string  `json:"kurir"`
+		Layanan           string  `json:"layanan_kurir"`
+		Ongkir            float64 `json:"ongkir"`
+		ExpectedUpdatedAt *string `json:"expected_updated_at"`
 	}
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, 400, "Format JSON tidak valid")
 		return
 	}
-	claims, id, now := rtdbClaimsFromRequest(r), r.PathValue("id"), time.Now()
+	claims, id := rtdbClaimsFromRequest(r), r.PathValue("id")
 	req.Kurir, req.Layanan = strings.TrimSpace(req.Kurir), strings.TrimSpace(req.Layanan)
 	if !wholeRupiah(req.Ongkir, 0) || strings.TrimSpace(req.Kurir) == "" || strings.TrimSpace(req.Layanan) == "" || len(req.Kurir) > 100 || len(req.Layanan) > 200 {
 		Error(w, 400, "Layanan atau biaya pengiriman belum valid")
 		return
 	}
+	var updatedAt string
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		order, _, err := fulfillmentInvoice(root, id)
 		if err != nil {
 			return err
@@ -164,11 +201,15 @@ func UpdateFulfillmentCourierRTDB(w http.ResponseWriter, r *http.Request) {
 		} else if err := sessionStaff(claims); err != nil {
 			return err
 		}
+		if err := checkFulfillmentRevision(order, req.ExpectedUpdatedAt); err != nil {
+			return err
+		}
+		defer func() { updatedAt = stringValue(order["tgl_update"], "") }()
 		if req.Kurir == pickupCourier && (req.Ongkir != 0 || req.Layanan != pickupService) {
 			return domainError(400, "Pengambilan mandiri tidak memiliki ongkir")
 		}
-		if req.Kurir != pickupCourier && stringValue(order["alamat_lengkap"], "") == "" {
-			return domainError(409, "Simpan alamat penerima sebelum memberi penawaran ekspedisi")
+		if req.Kurir != pickupCourier && !completeShippingRecipient(order) {
+			return domainError(409, "Lengkapi penerima, telepon, alamat, kota, dan kode pos sebelum memberi penawaran ekspedisi")
 		}
 		if order["kurir"] == req.Kurir && order["layanan_kurir"] == req.Layanan && numberValue(order["ongkir"]) == req.Ongkir {
 			return nil
@@ -187,15 +228,16 @@ func UpdateFulfillmentCourierRTDB(w http.ResponseWriter, r *http.Request) {
 		rtdbJSONError(w, err)
 		return
 	}
-	JSON(w, 200, Response{Success: true, Message: "Layanan pengiriman tersimpan"})
+	JSON(w, 200, Response{Success: true, Message: "Layanan pengiriman tersimpan", Data: map[string]interface{}{"updated_at": updatedAt}})
 }
 
 func RecordShippingPaymentRTDB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Reference string  `json:"reference"`
-		Amount    float64 `json:"amount"`
-		Courier   string  `json:"courier"`
-		Service   string  `json:"service"`
+		Reference         string  `json:"reference"`
+		Amount            float64 `json:"amount"`
+		Courier           string  `json:"courier"`
+		Service           string  `json:"service"`
+		ExpectedUpdatedAt *string `json:"expected_updated_at"`
 	}
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, 400, "Format bukti ongkir tidak valid")
@@ -206,8 +248,10 @@ func RecordShippingPaymentRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Isi referensi bukti dan nominal ongkir yang sesuai")
 		return
 	}
-	claims, now := rtdbClaimsFromRequest(r), time.Now()
+	claims := rtdbClaimsFromRequest(r)
+	var updatedAt string
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		if err := sessionStaff(claims); err != nil {
 			return err
 		}
@@ -215,6 +259,10 @@ func RecordShippingPaymentRTDB(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := checkFulfillmentRevision(order, req.ExpectedUpdatedAt); err != nil {
+			return err
+		}
+		defer func() { updatedAt = stringValue(order["tgl_update"], "") }()
 		if order["shipping_payment_status"] == "paid_manual" {
 			if order["shipping_payment_reference"] == req.Reference && numberValue(order["ongkir"]) == req.Amount && order["kurir"] == req.Courier && order["layanan_kurir"] == req.Service {
 				return nil
@@ -232,14 +280,15 @@ func RecordShippingPaymentRTDB(w http.ResponseWriter, r *http.Request) {
 		rtdbJSONError(w, err)
 		return
 	}
-	JSON(w, 200, Response{Success: true, Message: "Bukti ongkir tercatat. Saldo dan tagihan lelang tidak diubah"})
+	JSON(w, 200, Response{Success: true, Message: "Bukti ongkir tercatat. Saldo dan tagihan lelang tidak diubah", Data: map[string]interface{}{"updated_at": updatedAt}})
 }
 
 func UpdateFulfillmentResiRTDB(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Resi        string `json:"nomor_resi"`
-		Status      string `json:"status"`
-		Description string `json:"deskripsi"`
+		Resi              string  `json:"nomor_resi"`
+		Status            string  `json:"status"`
+		Description       string  `json:"deskripsi"`
+		ExpectedUpdatedAt *string `json:"expected_updated_at"`
 	}
 	if err := DecodeJSON(r, &req); err != nil {
 		Error(w, 400, "Format JSON tidak valid")
@@ -253,8 +302,10 @@ func UpdateFulfillmentResiRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Catatan pengiriman terlalu panjang")
 		return
 	}
-	claims, id, now := rtdbClaimsFromRequest(r), r.PathValue("id"), time.Now()
+	claims, id := rtdbClaimsFromRequest(r), r.PathValue("id")
+	var updatedAt string
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		if err := sessionStaff(claims); err != nil {
 			return err
 		}
@@ -262,6 +313,10 @@ func UpdateFulfillmentResiRTDB(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := checkFulfillmentRevision(order, req.ExpectedUpdatedAt); err != nil {
+			return err
+		}
+		defer func() { updatedAt = stringValue(order["tgl_update"], "") }()
 		current := stringValue(order["status"], "")
 		resi := req.Resi
 		if resi == "" {
@@ -284,8 +339,8 @@ func UpdateFulfillmentResiRTDB(w http.ResponseWriter, r *http.Request) {
 		if req.Status == "dikirim" && numberValue(order["ongkir"]) > 0 && order["shipping_payment_status"] != "paid_manual" {
 			return domainError(409, "Catat bukti ongkir diterima sebelum menyerahkan barang ke ekspedisi")
 		}
-		if req.Status == "dikirim" && (resi == "" || stringValue(order["alamat_lengkap"], "") == "" || stringValue(order["kurir"], "") == "") {
-			return domainError(400, "Alamat, kurir, dan nomor resi asli wajib tersedia sebelum barang dikirim")
+		if req.Status == "dikirim" && (resi == "" || !completeShippingRecipient(order) || stringValue(order["kurir"], "") == "" || stringValue(order["layanan_kurir"], "") == "") {
+			return domainError(400, "Data penerima lengkap, layanan kurir, dan nomor resi asli wajib tersedia sebelum barang dikirim")
 		}
 		if resi != "" {
 			order["nomor_resi"] = resi
@@ -301,7 +356,7 @@ func UpdateFulfillmentResiRTDB(w http.ResponseWriter, r *http.Request) {
 		rtdbJSONError(w, err)
 		return
 	}
-	JSON(w, 200, Response{Success: true, Message: "Status pengiriman tersimpan"})
+	JSON(w, 200, Response{Success: true, Message: "Status pengiriman tersimpan", Data: map[string]interface{}{"updated_at": updatedAt}})
 }
 
 func completeFulfillment(root map[string]interface{}, claims *RTDBClaims, id string, rating int, review string, now time.Time) error {
@@ -328,8 +383,12 @@ func completeFulfillment(root map[string]interface{}, claims *RTDBClaims, id str
 		return domainError(409, "Identitas penjual belum tertaut; pengelola perlu meninjau pencairan")
 	}
 	if stringValue(invoice["escrow_status"], "") != "released" {
-		net := numberValue(invoice["dana_penjual_diterima"])
-		if !wholeRupiah(net, 0) {
+		net, netOK := storedRupiah(invoice["dana_penjual_diterima"])
+		total, totalOK := storedRupiah(invoice["total_keseluruhan"])
+		hammer, hammerOK := storedRupiah(invoice["jumlah_pembayaran"])
+		premium, premiumOK := storedRupiah(invoice["premi_pembeli"])
+		commission, commissionOK := storedRupiah(invoice["biaya_komisi_platform"])
+		if !netOK || !totalOK || !hammerOK || !premiumOK || !commissionOK || hammer <= 0 || commission > hammer || net != hammer-commission || total != hammer+premium {
 			return domainError(409, "Nominal pencairan penjual belum valid")
 		}
 		if sellerUID != "" {
@@ -341,9 +400,9 @@ func completeFulfillment(root map[string]interface{}, claims *RTDBClaims, id str
 			recordWallet(root, sellerUID, "payout-"+id, "payout_c2c", net, "Hasil titip jual setelah konfirmasi penerimaan", id, now)
 		}
 		platform := treeNode(root, "platformLedger")
-		fee := numberValue(invoice["total_keseluruhan"]) - net
+		fee := total - net
 		if sellerUID == "" {
-			fee = numberValue(invoice["total_keseluruhan"])
+			fee = total
 		}
 		platform["invoice-"+rtdbPathID(rtdbNumericID(invoice["id_pembayaran"]))] = map[string]interface{}{"nominal": math.Max(0, fee), "created_at": now.UTC().Format(time.RFC3339Nano), "tipe": "auction_revenue"}
 		invoice["escrow_status"], invoice["released_at"] = "released", now.UTC().Format(time.RFC3339Nano)
@@ -359,9 +418,8 @@ func FinishFulfillmentRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Format JSON tidak valid")
 		return
 	}
-	now := time.Now()
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
-		return completeFulfillment(root, rtdbClaimsFromRequest(r), r.PathValue("id"), req.Rating, req.Ulasan, now)
+		return completeFulfillment(root, rtdbClaimsFromRequest(r), r.PathValue("id"), req.Rating, req.Ulasan, time.Now())
 	})
 	if err != nil {
 		rtdbJSONError(w, err)

@@ -77,6 +77,10 @@ func rtdbAuctionJoined(ctx context.Context, auction map[string]interface{}, priv
 	if err := rtdbGet(ctx, "items/"+rtdbPathID(rtdbNumericID(auction["id_barang"])), &item); err != nil {
 		return nil, err
 	}
+	return joinAuctionItem(auction, item, private), nil
+}
+
+func joinAuctionItem(auction, item map[string]interface{}, private bool) map[string]interface{} {
 	if item == nil {
 		item = map[string]interface{}{}
 	}
@@ -93,7 +97,7 @@ func rtdbAuctionJoined(ctx context.Context, auction map[string]interface{}, priv
 	} else {
 		formatDisplayFields(item, "nama_barang", "deskripsi_barang")
 	}
-	return map[string]interface{}{"lelang": copyAuction, "barang": item}, nil
+	return map[string]interface{}{"lelang": copyAuction, "barang": item}
 }
 
 func listLelang(w http.ResponseWriter, r *http.Request, private bool) {
@@ -102,6 +106,8 @@ func listLelang(w http.ResponseWriter, r *http.Request, private bool) {
 		rtdbJSONError(w, err)
 		return
 	}
+	items, err := rtdbItems(r.Context())
+	if err != nil { rtdbJSONError(w, err); return }
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	list := make([]map[string]interface{}, 0)
 	for _, auction := range rtdbAuctionList(auctions) {
@@ -112,11 +118,7 @@ func listLelang(w http.ResponseWriter, r *http.Request, private bool) {
 		if status != "" && state != status {
 			continue
 		}
-		joined, err := rtdbAuctionJoined(r.Context(), auction, private)
-		if err != nil {
-			rtdbJSONError(w, err)
-			return
-		}
+		joined := joinAuctionItem(auction, items[rtdbPathID(rtdbNumericID(auction["id_barang"]))], private)
 		if !private && stringValue(treeMap(joined["barang"])["status_verifikasi"], "") != "approved" {
 			continue
 		}
@@ -254,11 +256,12 @@ func resolveProxyBids(root map[string]interface{}, auction, item map[string]inte
 	type candidate struct {
 		uid      string
 		cap      float64
-		priority string
+		priority time.Time
 	}
 	values := map[string]candidate{}
 	if leader != "" {
-		values[leader] = candidate{leader, numberValue(auction["harga_akhir"]), stringValue(auction["last_bid_at"], "")}
+		priority, _ := auctionTime(auction["last_bid_at"])
+		values[leader] = candidate{leader, numberValue(auction["harga_akhir"]), priority}
 	}
 	for uid, value := range treeMap(treeMap(root["autoBids"])[id]) {
 		config, profile := treeMap(value), treeRecord(root, "users", uid)
@@ -270,7 +273,11 @@ func resolveProxyBids(root map[string]interface{}, auction, item map[string]inte
 		if existing, ok := values[uid]; ok && existing.cap > cap {
 			cap = existing.cap
 		}
-		values[uid] = candidate{uid, cap, stringValue(config["created_at"], "")}
+		priority, err := auctionTime(config["created_at"])
+		if err != nil {
+			continue
+		}
+		values[uid] = candidate{uid, cap, priority}
 	}
 	list := make([]candidate, 0, len(values))
 	for _, value := range values {
@@ -280,8 +287,8 @@ func resolveProxyBids(root map[string]interface{}, auction, item map[string]inte
 		if list[i].cap != list[j].cap {
 			return list[i].cap > list[j].cap
 		}
-		if list[i].priority != list[j].priority {
-			return list[i].priority < list[j].priority
+		if !list[i].priority.Equal(list[j].priority) {
+			return list[i].priority.Before(list[j].priority)
 		}
 		return list[i].uid < list[j].uid
 	})
@@ -349,9 +356,8 @@ func PlaceBidRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "ID lelang tidak valid")
 		return
 	}
-	now := time.Now()
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
-		return placeTreeBid(root, rtdbClaimsFromRequest(r), id, req.PenawaranHarga, now)
+		return placeTreeBid(root, rtdbClaimsFromRequest(r), id, req.PenawaranHarga, time.Now())
 	})
 	if err != nil {
 		rtdbJSONError(w, err)
@@ -366,9 +372,8 @@ func LockDepositRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "ID lelang tidak valid")
 		return
 	}
-	now := time.Now()
 	if err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
-		return lockAuctionHold(root, rtdbClaimsFromRequest(r), id, now)
+		return lockAuctionHold(root, rtdbClaimsFromRequest(r), id, time.Now())
 	}); err != nil {
 		rtdbJSONError(w, err)
 		return
@@ -384,8 +389,9 @@ func SetAutoBidRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Format JSON tidak valid")
 		return
 	}
-	claims, id, now := rtdbClaimsFromRequest(r), r.PathValue("id"), time.Now()
+	claims, id := rtdbClaimsFromRequest(r), r.PathValue("id")
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		if _, err := transactionProfile(root, claims); err != nil {
 			return err
 		}

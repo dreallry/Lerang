@@ -13,6 +13,8 @@ test('closing or reloading a pending top up reuses its request rather than creat
   assert.equal(topUpRequestId(200000, [transaction()], '', () => next), next);
   for (const status of ['sukses', 'gagal']) assert.equal(topUpRequestId(100000, [transaction(status)], first, () => next), next);
   assert.equal(topUpRequestId(100000, [], 'tampered', () => next), next);
+  assert.equal(topUpRequestId(100000, [], 'AUTO-LOCK-1', () => next), next);
+  assert.equal(topUpRequestId(200000, [transaction()], first, () => next), next);
 });
 
 function browserFixture(t) {

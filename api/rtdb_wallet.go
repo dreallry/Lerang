@@ -102,10 +102,9 @@ func WithdrawWalletRTDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var id string
-	now := time.Now()
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
 		var err error
-		id, err = requestWithdrawal(root, rtdbClaimsFromRequest(r), req, now)
+		id, err = requestWithdrawal(root, rtdbClaimsFromRequest(r), req, time.Now())
 		return err
 	})
 	if err != nil {
@@ -150,8 +149,9 @@ func ReviewWithdrawalRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Isi referensi transfer atau alasan penolakan")
 		return
 	}
-	id, claims, now := r.PathValue("id"), rtdbClaimsFromRequest(r), time.Now()
+	id, claims := r.PathValue("id"), rtdbClaimsFromRequest(r)
 	err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		now := time.Now()
 		request := treeRecord(root, "withdrawals", id)
 		if request == nil {
 			return domainError(404, "Permintaan penarikan tidak ditemukan")
