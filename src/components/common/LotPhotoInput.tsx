@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { ImageOff, Upload, X } from 'lucide-react';
 import { api, ApiError } from '../../services/api';
 import { MAX_LOT_PHOTOS, PHOTO_ACCEPT, photoBatchError, validPhotoUrl } from '../../utils/photos';
+import { useFormFeedback } from './FormFeedback';
 
 interface LotPhotoInputProps {
   photos: string[];
@@ -13,13 +14,19 @@ interface LotPhotoInputProps {
 export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false }: LotPhotoInputProps) {
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
+  const dropzone = useRef<HTMLDivElement>(null);
+  const { showError, clearFeedback } = useFormFeedback();
   const uploading = useRef(false);
   const uploadController = useRef<AbortController | null>(null);
   const [availability, setAvailability] = useState<'loading' | 'ready' | 'unavailable' | 'error'>('loading');
   const [retry, setRetry] = useState(0);
   const [dragging, setDragging] = useState(false);
   const [progress, setProgress] = useState('');
-  const [error, setError] = useState('');
+  const [error, storeError] = useState('');
+  const setError = (message: string, target: HTMLElement | null = dropzone.current) => {
+    storeError(message);
+    if (message) showError(message, { target }); else clearFeedback();
+  };
   const [notice, setNotice] = useState('');
   const [url, setUrl] = useState('');
   const busy = Boolean(progress);
@@ -81,10 +88,11 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
   function addUrl() {
     if (locked) return;
     const value = url.trim();
+    const field = document.getElementById(`${id}-url`);
     setError('');
-    if (full) { setError(`Maksimal ${MAX_LOT_PHOTOS} foto per lot.`); return; }
-    if (!validPhotoUrl(value)) { setError('Isi tautan langsung ke foto dengan alamat HTTP atau HTTPS yang valid.'); return; }
-    if (photos.includes(value)) { setError('Foto dengan tautan ini sudah ditambahkan.'); return; }
+    if (full) { setError(`Maksimal ${MAX_LOT_PHOTOS} foto per lot.`, field); return; }
+    if (!validPhotoUrl(value)) { setError('Isi tautan langsung ke foto dengan alamat HTTP atau HTTPS yang valid.', field); return; }
+    if (photos.includes(value)) { setError('Foto dengan tautan ini sudah ditambahkan.', field); return; }
     onChange([...photos, value]);
     setUrl('');
     setNotice('Tautan foto ditambahkan. Pastikan pratinjau menampilkan barang yang sesuai.');
@@ -97,6 +105,8 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
         {photos.length}/{MAX_LOT_PHOTOS} foto. Foto pertama menjadi sampul. JPG, PNG, WebP, atau GIF, maksimal 10 MB per file.
       </p>
       <div
+        ref={dropzone}
+        tabIndex={-1}
         data-photo-dropzone
         onDragOver={event => {
           event.preventDefault();
@@ -134,7 +144,7 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
       </div>
       <p role="status" aria-live="polite" className="break-words text-xs leading-5 text-muted-foreground">{progress || notice}</p>
       {busy && <button type="button" onClick={() => uploadController.current?.abort()} className="focus-ring min-h-11 text-xs font-semibold text-destructive underline">Hentikan unggahan</button>}
-      {error && <p role="alert" className="break-words text-xs leading-5 text-destructive">{error}</p>}
+      {error && <p className="break-words text-xs leading-5 text-destructive">{error}</p>}
 
       {photos.length > 0 && <ol className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {photos.map((photo, index) => <li key={photo} className="min-w-0 overflow-hidden rounded-lg border border-border">
@@ -148,6 +158,7 @@ export function LotPhotoInput({ photos, onChange, onBusyChange, disabled = false
 
       <details className="rounded-lg border border-border p-3">
         <summary className="focus-ring cursor-pointer py-2 text-xs font-medium text-foreground">Pakai tautan foto yang sudah tersedia</summary>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">Tempel tautan, lalu klik Tambahkan tautan untuk menampilkan pratinjau. Foto ikut pengajuan setelah muncul pada daftar di atas.</p>
         <label htmlFor={`${id}-url`} className="mb-1 mt-3 block text-xs text-muted-foreground">Tautan langsung ke foto</label>
         <div className="flex flex-col gap-2 sm:flex-row">
           <input id={`${id}-url`} type="text" inputMode="url" maxLength={4096} placeholder="https://…" value={url} disabled={locked || full} onChange={event => setUrl(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); addUrl(); } }} className="focus-ring min-h-11 min-w-0 flex-1 rounded border border-input bg-card px-3 text-sm text-foreground" />

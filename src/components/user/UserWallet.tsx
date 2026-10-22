@@ -18,6 +18,7 @@ import {
   Trash2
 } from 'lucide-react';
 import { GuestGuardView } from '../common/GuestGuardView';
+import { useFormFeedback } from '../common/FormFeedback';
 import { auth } from '../../firebase';
 import { authErrorMessage } from '../../utils/authErrors';
 import { generateUUID } from '../../utils/formatters';
@@ -46,7 +47,12 @@ export const UserWallet: React.FC<UserWalletProps> = ({ onNavigate }) => {
   const [activeTab, setActiveTab] = useState<'topup' | 'withdraw'>('topup');
   const [topUpAmount, setTopUpAmount] = useState<number>(5000000);
   const [customInput, setCustomInput] = useState<string>('');
-  const [topUpError, setTopUpError] = useState<string | null>(null);
+  const { showError, clearFeedback } = useFormFeedback();
+  const [topUpError, setTopUpErrorState] = useState<string | null>(null);
+  const setTopUpError = (message: string | null) => {
+    setTopUpErrorState(message);
+    if (message) showError(message); else clearFeedback();
+  };
 
   // Withdrawal form states
   const [withdrawBank, setWithdrawBank] = useState<string>('BCA');
@@ -54,12 +60,21 @@ export const UserWallet: React.FC<UserWalletProps> = ({ onNavigate }) => {
   const [withdrawAccountName, setWithdrawAccountName] = useState<string>(currentUser?.nama_lengkap || '');
   const [withdrawAmountStr, setWithdrawAmountStr] = useState<string>('');
   const [saveThisAccount, setSaveThisAccount] = useState<boolean>(true);
-  const [withdrawMessage, setWithdrawMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [withdrawMessage, setWithdrawMessageState] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const setWithdrawMessage = (notice: typeof withdrawMessage) => {
+    setWithdrawMessageState(notice);
+    if (notice?.type === 'error') showError(notice.text);
+    else if (notice) clearFeedback();
+  };
 
   // Password confirmation modal states
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [confirmPasswordError, setConfirmPasswordError] = useState<string | null>(null);
+  const [confirmPasswordError, setConfirmPasswordErrorState] = useState<string | null>(null);
+  const setConfirmPasswordError = (message: string | null) => {
+    setConfirmPasswordErrorState(message);
+    if (message) showError(message, { target: document.getElementById('withdraw-password') }); else clearFeedback();
+  };
   const [isConfirmingWithdraw, setIsConfirmingWithdraw] = useState(false);
   const withdrawalRequest = useRef<{details:string;id:string}|null>(null);
 

@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { useAuction } from '../../context/AuctionContext';
 import { CategoryType } from '../../types';
 import { AdminDialog } from '../common/AdminDialog';
 import { LotPhotoInput } from '../common/LotPhotoInput';
+import { useFormFeedback } from '../common/FormFeedback';
 import { formatRupiah, formatDateIndo } from '../../utils/formatters';
 import {
   Plus,
@@ -37,18 +38,21 @@ export const AdminAuctionManager: React.FC<AdminAuctionManagerProps> = ({ onNavi
 
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [formError, setFormError] = useState('');
-  const formErrorElement = useRef<HTMLParagraphElement>(null);
-  useEffect(() => {
-    if (formError) {
-      formErrorElement.current?.focus();
-      formErrorElement.current?.scrollIntoView({ block: 'center' });
-    }
-  }, [formError]);
+  const { showError, clearFeedback } = useFormFeedback();
+  const [formError, setFormErrorState] = useState('');
+  const setFormError = (message: string) => {
+    setFormErrorState(message);
+    if (message) showError(message); else clearFeedback();
+  };
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [isOpeningSerentak, setIsOpeningSerentak] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [toast, setToastState] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const setToast = (notice: typeof toast) => {
+    setToastState(notice);
+    if (notice?.type === 'error') showError(notice.message);
+    else if (notice) clearFeedback();
+  };
 
   const handleBukaSerentak = async () => {
     try {
@@ -389,7 +393,7 @@ export const AdminAuctionManager: React.FC<AdminAuctionManagerProps> = ({ onNavi
               </button>
             </div>
 
-            {formError && <p ref={formErrorElement} tabIndex={-1} role="alert" className="focus-ring rounded border border-destructive/30 bg-card p-3 text-sm text-destructive">{formError} Isian dan foto tetap tersedia untuk diperbaiki.</p>}
+            {formError && <p className="rounded border border-destructive/30 bg-card p-3 text-sm text-destructive">{formError} Isian dan foto tetap tersedia untuk diperbaiki.</p>}
             <fieldset disabled={isSaving} className="min-w-0 space-y-5 text-sm">
               <div>
                 <label htmlFor="lot-name" className="text-foreground font-bold block mb-1">Nama Barang</label>

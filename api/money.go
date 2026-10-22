@@ -49,17 +49,6 @@ func parseRupiahAmount(value string) (int64, error) {
 	return whole*100 + minor, nil
 }
 
-func rupiahAmountToMidtrans(value string) (int64, error) {
-	minor, err := parseRupiahAmount(value)
-	if err != nil {
-		return 0, err
-	}
-	if minor%100 != 0 {
-		return 0, errors.New("nominal IDR harus berupa bilangan rupiah utuh")
-	}
-	return minor / 100, nil
-}
-
 func validPaymentAmount(amount int64) bool {
 	return amount > 0 && amount <= maxDatabaseRupiah
 }

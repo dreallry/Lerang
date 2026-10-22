@@ -7,6 +7,7 @@ import { auth } from "@/firebase";
 import { authErrorMessage } from '@/utils/authErrors';
 import { parseSessionProfile } from '@/utils/sessionProfile';
 import { useAuction } from '@/context/AuctionContext';
+import { useFormFeedback } from '../common/FormFeedback';
 
 export interface LoginFormProps {
   className?: string;
@@ -26,6 +27,7 @@ export default function LoginForm({
   onSuccess,
 }: LoginFormProps) {
   const { reloadSession } = useAuction();
+  const { showError } = useFormFeedback();
   const registrationEmail = typeof window !== "undefined"
     ? window.sessionStorage.getItem("lerang_registration_email") || ""
     : "";
@@ -53,7 +55,6 @@ export default function LoginForm({
     let firebaseSignedIn = false;
 
     try {
-      api.setToken(null);
       await signInWithEmailAndPassword(auth, identifier.trim().toLowerCase(), password);
       firebaseSignedIn = true;
       const response = await api.me();
@@ -67,7 +68,9 @@ export default function LoginForm({
         return;
       }
       if (firebaseSignedIn) await signOut(auth).catch(() => undefined);
-      setStatusMessage(authErrorMessage(error));
+      const message = authErrorMessage(error);
+      setStatusMessage(message);
+      showError(message);
     } finally {
       setIsSubmitting(false);
     }
@@ -84,7 +87,9 @@ export default function LoginForm({
       reloadSession();
       onNavigate?.(response.data.profile_required ? 'register' : (parseSessionProfile((await api.me()).data).kind === 'petugas' ? 'admin-dashboard' : 'catalog'));
     } catch (error) {
-      setStatusMessage(authErrorMessage(error));
+      const message = authErrorMessage(error);
+      setStatusMessage(message);
+      showError(message);
     } finally {
       setIsSubmitting(false);
     }

@@ -10,7 +10,7 @@ Form lot petugas dan titip jual memakai pemilih foto yang sama: pilih beberapa f
 
 Penyimpanan disk dibatasi total 500 MB. Foto yang dilepas dari formulir tetap ada di disk untuk menghindari penghapusan file yang mungkin sudah dipakai lot lain; petugas perlu membersihkan file tak terpakai saat pemeliharaan. **Cadangkan folder foto bersama backup RTDB** dan gunakan disk persisten saat deploy. Hosting statis Firebase saja tidak menjalankan Go atau menyimpan upload server. Reverse proxy website harus meneruskan `/api` termasuk `/api/photos` ke Go, sehingga path foto relatif tetap bekerja setelah perpindahan domain. Bila API ditempatkan pada domain terpisah, tambahkan proxy foto pada domain website juga. Tidak menyimpan base64 foto di RTDB atau browser.
 
-`npm run check:firebase` memeriksa kecocokan proyek, layanan Auth, akses RTDB, dan keberadaan bucket Storage menggunakan pemeriksaan baca saja. Bucket harus benar-benar dibuat di Firebase Console; mengisi namanya di `.env` belum membuat bucket. Jika Console meminta aktivasi paket Blaze, pemilik akun perlu mengaktifkan billing sendiri. Panduan: [Firebase Cloud Storage](https://firebase.google.com/docs/storage/web/start).
+`npm run check:firebase` memeriksa kecocokan proyek, layanan Auth, akses RTDB, dan penyimpanan foto menggunakan pemeriksaan baca saja. Bucket yang belum tersedia menghasilkan peringatan bila `PHOTO_UPLOAD_DIR` sudah diisi; Go tetap memeriksa akses tulis folder saat dimulai. Bucket harus benar-benar dibuat di Firebase Console jika ingin memakai Storage; mengisi namanya di `.env` belum membuat bucket. Tidak perlu aktivasi billing untuk penyimpanan foto di server. Panduan: [Firebase Cloud Storage](https://firebase.google.com/docs/storage/web/start).
 
 ## Sumber dan pemeriksaan awal
 
@@ -107,7 +107,7 @@ Dengan server pengembangan aktif di port 5173, jalankan `npm run check:admin-mod
 
 Konfigurasi utama memakai `node_modules/.vite-app`. Jika menjalankan Vite dengan konfigurasi pengujian lain, pilih `cacheDir` yang berbeda. Pada 19 Oktober 2026, konfigurasi pengujian menimpa cache bersama sehingga `recharts`, `jspdf`, dan `jspdf-autotable` mendapat HTTP 504 dan dashboard menjadi putih. Pemeriksaan modul di atas mendeteksi kegagalan tersebut sebelum cache dipisahkan.
 
-`tests/browser/error-boundary.html` merupakan fixture pemulihan halaman. Buka melalui server pengembangan untuk memicu kegagalan lazy import yang disengaja. Harus tampil pesan pemulihan dengan tombol muat ulang dan kembali ke katalog; tombol kedua membuka halaman katalog fixture. Fixture tidak masuk build situs dan tidak memakai data atau kredensial Firebase.
+`tests/browser/error-boundary.html` merupakan fixture pemulihan halaman untuk server pengujian yang terpisah. Server pengembangan utama dan halaman aksi Auth menolak akses ke `tests/`, `tmp/`, `artifacts/`, `secrets/`, folder upload, serta berkas kunci dan database. Fixture memicu kegagalan lazy import yang disengaja; harus tampil tombol muat ulang dan kembali ke katalog fixture. Fixture tidak masuk build situs dan tidak memakai data atau kredensial Firebase.
 
 `npm test` juga memeriksa waktu lokal formulir sesi pada beberapa zona waktu serta pengutipan dan perlindungan formula pada CSV. Untuk pengujian browser administrasi dengan data asli, gunakan sesi admin, buka kesembilan menu, lalu periksa unduhan CSV/PDF. Pemeriksaan baca tidak memerlukan persetujuan barang, pembatalan lelang, atau perubahan dana.
 

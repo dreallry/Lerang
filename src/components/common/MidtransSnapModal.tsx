@@ -6,6 +6,7 @@ import { topUpRequestId } from '../../utils/paymentAttempt';
 import { loadSnap } from '../../utils/midtransSnap';
 import { auth } from '../../firebase';
 import api, { SnapPaymentResponse } from '../../services/api';
+import { useFormFeedback } from './FormFeedback';
 
 declare global {
   interface Window {
@@ -19,6 +20,7 @@ const delay = (milliseconds: number) => new Promise(resolve => window.setTimeout
 
 export const MidtransSnapModal: React.FC = () => {
   const { midtransModal, closeMidtransModal, topUpDeposit, payInvoice, refreshFinancialData, transactionsList } = useAuction();
+  const { showError, clearFeedback } = useFormFeedback();
   const [isProcessing, setIsProcessing] = useState(false);
   const [isVerified, setIsVerified] = useState(false);
   const [message, setMessage] = useState('');
@@ -62,7 +64,7 @@ export const MidtransSnapModal: React.FC = () => {
     if (!active() || checking.current || verified.current) return;
     const orderId = payment.data?.order_id;
     if (!orderId) return;
-    checking.current = true; setIsProcessing(true); setMessage('Memeriksa pembayaran melalui server...');
+    checking.current = true; setIsProcessing(true); setMessage('Memeriksa pembayaran melalui server...'); clearFeedback();
     try {
       const deadline = Date.now() + 60_000;
       while (active() && Date.now() < deadline) {
@@ -72,7 +74,8 @@ export const MidtransSnapModal: React.FC = () => {
         if (!active()) return;
         if (['failed','review_required'].includes(status.data.status)) {
           setTerminal(true);
-          setMessage(status.data.status === 'failed' ? 'Pembayaran ini sudah berakhir atau gagal. Saldo tidak ditambahkan. Kembali ke dompet atau tagihan untuk membuat pembayaran baru.' : 'Pembayaran memerlukan pemeriksaan petugas. Jangan mengulang pembayaran sebelum statusnya dipastikan.');
+          const message = status.data.status === 'failed' ? 'Pembayaran ini sudah berakhir atau gagal. Saldo tidak ditambahkan. Kembali ke dompet atau tagihan untuk membuat pembayaran baru.' : 'Pembayaran memerlukan pemeriksaan petugas. Jangan mengulang pembayaran sebelum statusnya dipastikan.';
+          setMessage(message); showError(message);
           return;
         }
         if (paid) {
@@ -90,7 +93,7 @@ export const MidtransSnapModal: React.FC = () => {
       }
       if (active()) setMessage('Belum ada konfirmasi pembayaran. Anda bisa menutup halaman ini dan memeriksa riwayat transaksi.');
     } catch (error) {
-      if (active()) setMessage(error instanceof Error ? error.message : 'Status belum dapat diperiksa. Coba kembali.');
+      if (active()) { const message = error instanceof Error ? error.message : 'Status belum dapat diperiksa. Coba kembali.'; setMessage(message); showError(message); }
     } finally {
       if (active()) { checking.current = false; setIsProcessing(false); }
     }
@@ -98,7 +101,7 @@ export const MidtransSnapModal: React.FC = () => {
 
   const handleStartPayment = async () => {
     if (isProcessing || !active()) return;
-    setIsProcessing(true); setMessage('');
+    setIsProcessing(true); setMessage(''); clearFeedback();
     try {
       if (midtransModal.type === 'topup' && !requestId) throw new Error('Browser tidak dapat membuat ID transaksi yang aman. Perbarui browser lalu coba lagi.');
       const payment = checkout || (midtransModal.type === 'topup'
@@ -119,13 +122,14 @@ export const MidtransSnapModal: React.FC = () => {
       window.snap.pay(payment.data.snap_token, {
         onSuccess: () => { restore(); void checkPayment(payment); },
         onPending: () => { restore(); finish('Pembayaran belum selesai. Lanjutkan pembayaran yang sama atau periksa status.'); },
-        onError: () => { restore(); finish('Pembayaran dilaporkan gagal oleh Midtrans. Periksa status melalui server sebelum mengulang.'); },
+        onError: () => { restore(); const message = 'Pembayaran dilaporkan gagal oleh Midtrans. Periksa status melalui server sebelum mengulang.'; finish(message); if (active() && !verified.current && !checking.current) showError(message); },
         onClose: () => { restore(); finish('Jendela Midtrans ditutup. Pembayaran yang sama bisa dilanjutkan.'); },
       });
     } catch (error) {
       if (active()) {
         if (!dialog.current?.open) dialog.current?.showModal();
-        setMessage(error instanceof Error ? error.message : 'Gagal menyiapkan pembayaran.'); setIsProcessing(false);
+        const message = error instanceof Error ? error.message : 'Gagal menyiapkan pembayaran.';
+        setMessage(message); showError(message); setIsProcessing(false);
       }
     }
   };

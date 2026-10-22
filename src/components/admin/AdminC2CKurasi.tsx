@@ -2,8 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useAuction } from '../../context/AuctionContext';
 import { TbBarang, CategoryType } from '../../types';
 import { AdminDialog } from '../common/AdminDialog';
+import { useFormFeedback } from '../common/FormFeedback';
+import { LotPhotoInput } from '../common/LotPhotoInput';
 import { formatRupiah } from '../../utils/formatters';
 import { itemRevision } from '../../utils/catalogData';
+import { submissionDetails } from '../../utils/submissionDetails';
+import { validPhotoUrl } from '../../utils/photos';
 import {
   FileCheck2,
   CheckCircle2,
@@ -43,6 +47,8 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
     approveC2CListing,
     rejectC2CListing,
     updateBarangInfo,
+    accountDataStatus,
+    reloadAccountData,
   } = useAuction();
 
   const [isSaving, setIsSaving] = useState(false);
@@ -63,11 +69,20 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
   const [editHargaAwal, setEditHargaAwal] = useState('');
   const [editReservePrice, setEditReservePrice] = useState('');
   const [editDeskripsi, setEditDeskripsi] = useState('');
+  const [editDocuments, setEditDocuments] = useState('');
+  const [editPhotos, setEditPhotos] = useState<string[]>([]);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
   const [activePhotoIdx, setActivePhotoIdx] = useState(0);
 
   // Toast feedback state
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const { showError, clearFeedback } = useFormFeedback();
+  const [toast, setToastState] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const setToast = (notice: typeof toast, target?: HTMLElement | null) => {
+    setToastState(notice);
+    if (notice?.type === 'error') showError(notice.message, { target });
+    else if (notice) clearFeedback();
+  };
 
   // Pagination state for history table
   const [historyPage, setHistoryPage] = useState(1);
@@ -84,11 +99,14 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
   const allCuratedItems = barangList.filter((b) => b.id_user !== null);
   const latestSelected = selectedBarang && barangList.find((item) => item.id_barang === selectedBarang.id_barang);
   const selectedChanged = Boolean(selectedBarang && (!latestSelected || itemRevision(latestSelected) !== itemRevision(selectedBarang)));
+  const dataReady = accountDataStatus === 'ready';
+  const selectedDocumentIssue = selectedBarang && submissionDetails(selectedBarang.dokumen_pendukung || [], []).error;
+  const selectedPhotoIssue = selectedBarang?.foto_barang.some(photo => !validPhotoUrl(photo));
   const staleNotice = selectedChanged ? (
     <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
       Barang ini telah diubah atau diproses. Tutup formulir lalu buka kembali untuk memeriksa versi terbaru.
     </p>
-  ) : null;
+  ) : !dataReady ? <p role="status" className="border border-border p-3 text-sm">Data kurasi belum siap. Tunggu pembaruan selesai atau tutup formulir dan muat ulang antrean.</p> : null;
 
   // Pagination calculation
   const totalPages = Math.ceil(allCuratedItems.length / ITEMS_PER_PAGE) || 1;
@@ -102,6 +120,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
   }, [totalPages]);
 
   const handleOpenApproveModal = (b: TbBarang) => {
+    clearFeedback();
     setSelectedBarang(b);
     const suggestedDeposit = Math.max(1000000, Math.round(b.harga_awal * 0.1));
     const suggestedIncrement = b.harga_awal >= 100000000 ? '2500000' : '500000';
@@ -112,74 +131,84 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
   };
 
   const handleOpenRejectModal = (b: TbBarang) => {
+    clearFeedback();
     setSelectedBarang(b);
     setRejectReason('');
     setModalMode('reject');
   };
 
   const handleOpenInspect = (b: TbBarang) => {
+    clearFeedback();
     setSelectedBarang(b);
     setActivePhotoIdx(0);
     setModalMode('inspect');
   };
 
   const handleOpenEditMinor = (b: TbBarang) => {
+    clearFeedback();
     setSelectedBarang(b);
     setEditNama(b.nama_barang);
     setEditKategori(b.kategori);
     setEditHargaAwal(String(b.harga_awal));
     setEditReservePrice(b.reserve_price ? String(b.reserve_price) : '');
     setEditDeskripsi(b.deskripsi_barang);
+    setEditDocuments((b.dokumen_pendukung || []).join('\n'));
+    setEditPhotos(b.foto_barang);
     setModalMode('edit');
   };
 
   const handleExecuteApprove = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving || selectedChanged) return;
+    if (!selectedBarang || isSaving || selectedChanged || !dataReady) return;
+    clearFeedback();
 
     const kelipatanNum = Number(kelipatan);
     const jaminanNum = Number(uangJaminan);
     const reserveNum = reservePrice ? Number(reservePrice) : undefined;
 
-    if (isNaN(kelipatanNum) || kelipatanNum < 10000) {
+    if (!Number.isSafeInteger(kelipatanNum) || kelipatanNum < 10000) {
       setToast({ type: 'error', message: 'Kelipatan minimal penawaran harus minimal Rp 10.000.' });
       return;
     }
 
-    if (isNaN(jaminanNum) || jaminanNum < 100000) {
+    if (!Number.isSafeInteger(jaminanNum) || jaminanNum < 100000) {
       setToast({ type: 'error', message: 'Uang jaminan deposit minimal Rp 100.000.' });
       return;
     }
 
-    if (reserveNum && reserveNum < selectedBarang.harga_awal) {
+    if (reserveNum !== undefined && (!Number.isSafeInteger(reserveNum) || reserveNum < 0 || reserveNum > 0 && reserveNum < selectedBarang.harga_awal)) {
       setToast({
         type: 'error',
         message: 'Reserve price tidak boleh lebih rendah dari harga limit pembuka barang.',
       });
       return;
     }
+    if (selectedDocumentIssue || selectedPhotoIssue) {
+      setToast({ type: 'error', message: 'Lampiran barang belum valid. Buka Perbaiki data barang untuk mengganti tautan atau foto sebelum menyetujui.' });
+      return;
+    }
 
     setIsSaving(true);
-    const res = await approveC2CListing(selectedBarang.id_barang, {
-      expected_updated_at: itemRevision(selectedBarang),
-      kelipatan_minimal: kelipatanNum,
-      uang_jaminan: jaminanNum,
-      reserve_price: reserveNum,
-    });
-
-    setIsSaving(false);
-    if (res.success) {
-      setToast({ type: 'success', message: res.message });
-      setModalMode(null);
-      setSelectedBarang(null);
-    } else {
-      setToast({ type: 'error', message: res.message });
-    }
+    try {
+      const res = await approveC2CListing(selectedBarang.id_barang, {
+        expected_updated_at: itemRevision(selectedBarang),
+        kelipatan_minimal: kelipatanNum,
+        uang_jaminan: jaminanNum,
+        reserve_price: reserveNum,
+      });
+      if (res.success) {
+        setToast({ type: 'success', message: res.message });
+        setModalMode(null);
+        setSelectedBarang(null);
+      } else setToast({ type: 'error', message: res.message });
+    } catch { setToast({ type: 'error', message: 'Persetujuan belum dapat dipastikan. Muat ulang antrean sebelum mencoba lagi.' }); }
+    finally { setIsSaving(false); }
   };
 
   const handleExecuteReject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving || selectedChanged) return;
+    if (!selectedBarang || isSaving || selectedChanged || !dataReady) return;
+    clearFeedback();
 
     if (!rejectReason.trim()) {
       setToast({ type: 'error', message: 'Mohon tuliskan alasan penolakan secara jelas.' });
@@ -187,20 +216,21 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
     }
 
     setIsSaving(true);
-    const res = await rejectC2CListing(selectedBarang.id_barang, rejectReason.trim(), itemRevision(selectedBarang));
-    setIsSaving(false);
-    if (res.success) {
-      setToast({ type: 'success', message: res.message });
-      setModalMode(null);
-      setSelectedBarang(null);
-    } else {
-      setToast({ type: 'error', message: res.message });
-    }
+    try {
+      const res = await rejectC2CListing(selectedBarang.id_barang, rejectReason.trim(), itemRevision(selectedBarang));
+      if (res.success) {
+        setToast({ type: 'success', message: res.message });
+        setModalMode(null);
+        setSelectedBarang(null);
+      } else setToast({ type: 'error', message: res.message });
+    } catch { setToast({ type: 'error', message: 'Penolakan belum dapat dipastikan. Muat ulang antrean sebelum mencoba lagi.' }); }
+    finally { setIsSaving(false); }
   };
 
   const handleExecuteEditMinor = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBarang || isSaving || selectedChanged) return;
+    if (!selectedBarang || isSaving || isUploadingPhoto || selectedChanged || !dataReady) return;
+    clearFeedback();
 
     if (!editNama.trim()) {
       setToast({ type: 'error', message: 'Nama barang tidak boleh kosong.' });
@@ -208,41 +238,38 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
     }
 
     const hargaNum = Number(editHargaAwal);
-    if (isNaN(hargaNum) || hargaNum < 100000) {
+    if (!Number.isSafeInteger(hargaNum) || hargaNum < 100000) {
       setToast({ type: 'error', message: 'Harga limit awal minimal Rp 100.000.' });
       return;
     }
+    const reserve = editReservePrice.trim() ? Number(editReservePrice) : 0;
+    if (!Number.isSafeInteger(reserve) || reserve < 0 || reserve > 0 && reserve < hargaNum) {
+      setToast({ type: 'error', message: 'Harga cadangan harus dalam rupiah utuh dan tidak lebih rendah dari harga awal. Kosongkan jika tidak digunakan.' }, document.getElementById('curation-edit-reserve'));
+      return;
+    }
+    const details = submissionDetails(editDocuments.split(/\r?\n/), []);
+    if (details.error) { setToast({ type: 'error', message: details.error.message }, document.getElementById('curation-documents')); return; }
+    if (editPhotos.some(photo => !validPhotoUrl(photo))) { setToast({ type: 'error', message: 'Hapus atau ganti tautan foto yang belum valid sebelum menyimpan.' }); return; }
 
     setIsSaving(true);
-    const res = await updateBarangInfo(selectedBarang.id_barang, {
-      expected_updated_at: itemRevision(selectedBarang),
-      nama_barang: editNama.trim(),
-      kategori: editKategori,
-      harga_awal: hargaNum,
-      reserve_price: editReservePrice.trim() ? Number(editReservePrice) : 0,
-      deskripsi_barang: editDeskripsi.trim(),
-    });
-
-    setIsSaving(false);
-    if (res.success) {
-      setToast({ type: 'success', message: res.message });
-      // Update local state if inspecting
-      setSelectedBarang((prev) =>
-        prev
-          ? {
-              ...prev,
-              nama_barang: editNama.trim(),
-              kategori: editKategori,
-              harga_awal: hargaNum,
-              reserve_price: editReservePrice.trim() ? Number(editReservePrice) : 0,
-              deskripsi_barang: editDeskripsi.trim(),
-            }
-          : null
-      );
-      setModalMode(null);
-    } else {
-      setToast({ type: 'error', message: res.message });
-    }
+    try {
+      const res = await updateBarangInfo(selectedBarang.id_barang, {
+        expected_updated_at: itemRevision(selectedBarang),
+        nama_barang: editNama.trim(),
+        kategori: editKategori,
+        harga_awal: hargaNum,
+        reserve_price: reserve,
+        deskripsi_barang: editDeskripsi.trim(),
+        dokumen_pendukung: details.documents,
+        foto_barang: editPhotos,
+      });
+      if (res.success) {
+        setToast({ type: 'success', message: res.message });
+        setSelectedBarang(null);
+        setModalMode(null);
+      } else setToast({ type: 'error', message: res.message });
+    } catch { setToast({ type: 'error', message: 'Perubahan belum dapat dipastikan. Isian tetap tersedia; muat ulang antrean sebelum mencoba lagi.' }); }
+    finally { setIsSaving(false); }
   };
 
   if (currentRole === 'masyarakat') {
@@ -302,16 +329,17 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-foreground">Antrean Pengajuan Menunggu Kurasi</span>
             <span className="px-2.5 py-0.5 rounded-full bg-secondary text-secondary-foreground text-xs font-bold border border-border">
-              {pendingItems.length} Menunggu
+              {dataReady ? `${pendingItems.length} Menunggu` : 'Memuat antrean'}
             </span>
           </div>
           <span className="text-xs text-muted-foreground">SOP Validasi & Kurasi: 3 Hari Kerja</span>
         </div>
 
+        {!dataReady && <div role={accountDataStatus === 'error' ? 'alert' : 'status'} className="space-y-3 border border-border p-4 text-sm"><p>{accountDataStatus === 'error' ? 'Data kurasi belum dapat dimuat. Keputusan dinonaktifkan sampai data terbaru tersedia.' : 'Memuat pengajuan dan hasil kurasi terbaru...'}</p>{accountDataStatus === 'error' && <button type="button" className="button-secondary" onClick={reloadAccountData}>Muat ulang antrean</button>}</div>}
         {pendingItems.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground text-xs space-y-2">
             <CheckCircle2 className="w-10 h-10 text-primary mx-auto" />
-            <p className="font-semibold text-foreground">Semua pengajuan barang masyarakat telah selesai diverifikasi.</p>
+            <p className="font-semibold text-foreground">{dataReady ? 'Semua pengajuan barang masyarakat telah selesai diverifikasi.' : 'Antrean ditampilkan setelah data berhasil dimuat.'}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -385,7 +413,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                       type="button"
                       onClick={() => handleOpenEditMinor(b)}
                       className="px-3 py-2 rounded-xl bg-card hover:bg-muted border border-border text-foreground text-xs font-bold transition flex items-center gap-1 cursor-pointer"
-                      title="Koreksi typo atau detail minor"
+                      title="Perbaiki informasi, foto, dan lampiran barang"
                     >
                       <Pencil className="w-3.5 h-3.5 text-amber-500" />
                       <span>Edit</span>
@@ -548,12 +576,13 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 />
               </div>
               {selectedBarang.foto_barang.length > 1 && (
-                <div className="flex gap-2">
+                <div className="flex gap-2 overflow-x-auto pb-1">
                   {selectedBarang.foto_barang.map((img, i) => (
                     <button
                       key={i}
                       onClick={() => setActivePhotoIdx(i)}
-                      className={`w-16 h-12 rounded-lg overflow-hidden border-2 cursor-pointer ${
+                      aria-label={`Lihat foto ${i + 1}`}
+                      className={`w-16 h-12 shrink-0 rounded-lg overflow-hidden border-2 cursor-pointer ${
                         activePhotoIdx === i ? 'border-primary' : 'border-border'
                       }`}
                     >
@@ -600,12 +629,12 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 className="py-2.5 px-4 bg-muted hover:bg-card border border-border text-foreground rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Pencil className="w-3.5 h-3.5 text-amber-500" />
-                <span>Koreksi Typo</span>
+                <span>Perbaiki data</span>
               </button>
               <button
                 type="button"
                 disabled={selectedChanged}
-                onClick={() => setModalMode('reject')}
+                onClick={() => handleOpenRejectModal(selectedBarang)}
                 className="flex-1 py-2.5 bg-destructive/10 text-destructive hover:bg-destructive/20 border border-destructive/30 rounded-xl text-xs font-bold cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Tolak Pengajuan
@@ -613,7 +642,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               <button
                 type="button"
                 disabled={selectedChanged}
-                onClick={() => setModalMode('approve')}
+                onClick={() => handleOpenApproveModal(selectedBarang)}
                 className="flex-1 py-2.5 bg-primary text-primary-foreground border border-border rounded-xl text-xs font-bold hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Lanjut Setujui (Lot Pool)
@@ -642,6 +671,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
             {/* Explanatory callout for session scheduling */}
             {staleNotice}
+            {(selectedDocumentIssue || selectedPhotoIssue) && <div className="space-y-3 border border-destructive p-3 text-sm"><p>{selectedDocumentIssue?.message || 'Ada tautan foto yang belum valid.'} Perbaiki lampiran sebelum menyetujui. Penolakan tetap dapat dilakukan tanpa mengubah lampiran.</p><button type="button" className="button-secondary" disabled={isSaving || selectedChanged} onClick={() => handleOpenEditMinor(selectedBarang)}>Perbaiki data barang</button></div>}
             <div className="p-3 rounded-xl bg-primary/10 border border-primary/20 text-xs space-y-1">
               <div className="flex items-center gap-1.5 font-bold text-foreground">
                 <Inbox className="w-4 h-4 text-primary" />
@@ -652,15 +682,18 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </p>
             </div>
 
-            <div className="space-y-3 text-xs">
+            <fieldset disabled={isSaving || selectedChanged} className="space-y-3 text-xs">
               <div>
-                <label className="text-foreground font-bold block mb-1">
+                <label htmlFor="curation-increment" className="text-foreground font-bold block mb-1">
                   Kelipatan Penawaran Minimal (Incremental Step)
                 </label>
                 <input
+                  id="curation-increment"
                   type="number"
                   required
                   min={10000}
+                  step={1}
+                  max={9999999999999}
                   value={kelipatan}
                   onChange={(e) => setKelipatan(e.target.value)}
                   className="w-full bg-muted/40 border border-border rounded-xl px-3 py-2 text-foreground font-mono"
@@ -668,13 +701,16 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </div>
 
               <div>
-                <label className="text-foreground font-bold block mb-1">
+                <label htmlFor="curation-deposit" className="text-foreground font-bold block mb-1">
                   Uang Jaminan/Deposit Wajib Peserta (IDR)
                 </label>
                 <input
+                  id="curation-deposit"
                   type="number"
                   required
                   min={100000}
+                  step={1}
+                  max={9999999999999}
                   value={uangJaminan}
                   onChange={(e) => setUangJaminan(e.target.value)}
                   className="w-full bg-muted/40 border border-border rounded-xl px-3 py-2 text-foreground font-mono"
@@ -683,13 +719,17 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
               <div>
                 <div className="flex justify-between items-center mb-1">
-                  <label className="text-foreground font-bold">
+                  <label htmlFor="curation-reserve" className="text-foreground font-bold">
                     Reserve Price (Harga Cadangan Minimal)
                   </label>
                   <span className="text-[10px] text-muted-foreground">Opsional</span>
                 </div>
                 <input
+                  id="curation-reserve"
                   type="number"
+                  min={0}
+                  step={1}
+                  max={9999999999999}
                   placeholder="Kosongkan jika tanpa reserve price"
                   value={reservePrice}
                   onChange={(e) => setReservePrice(e.target.value)}
@@ -699,7 +739,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                   Batas minimal penjualan. Jika bid tertinggi di bawah angka ini, lot tidak akan terjual.
                 </p>
               </div>
-            </div>
+            </fieldset>
 
             <div className="pt-2 flex gap-2">
               <button
@@ -711,7 +751,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving || selectedChanged}
+                type="submit" disabled={isSaving || selectedChanged || !dataReady || !!selectedDocumentIssue || !!selectedPhotoIssue}
                 className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 flex items-center justify-center gap-1.5 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <CheckCircle2 className="w-4 h-4" />
@@ -741,12 +781,15 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
             {staleNotice}
             <div>
-              <label className="text-xs font-bold text-foreground block mb-1">
+              <label htmlFor="curation-rejection-reason" className="text-xs font-bold text-foreground block mb-1">
                 Alasan Penolakan (Akan Dikirim ke User)
               </label>
               <textarea
+                id="curation-rejection-reason"
                 rows={4}
                 required
+                maxLength={2000}
+                disabled={isSaving || selectedChanged}
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
                 className="w-full bg-muted/40 border border-border rounded-xl p-3 text-xs text-foreground outline-none"
@@ -763,7 +806,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving || selectedChanged}
+                type="submit" disabled={isSaving || selectedChanged || !dataReady}
                 className="w-2/3 py-2.5 bg-destructive text-destructive-foreground rounded-xl text-xs font-bold border border-border hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
                 Kirim Penolakan
@@ -775,7 +818,7 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
       {/* MODAL 4: EDIT MINOR MODAL */}
       {modalMode === 'edit' && selectedBarang && (
-        <AdminDialog title="Ubah barang" busy={isSaving} onClose={() => setModalMode(null)}>
+        <AdminDialog title="Ubah barang" busy={isSaving || isUploadingPhoto} onClose={() => setModalMode(null)}>
           <form
             onSubmit={handleExecuteEditMinor}
             className="relative w-full max-w-lg bg-card border border-border rounded-lg p-6 space-y-4 shadow-xl"
@@ -784,22 +827,24 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               <div>
                 <h3 className="text-base font-bold text-foreground flex items-center gap-1.5">
                   <CheckSquare className="w-4 h-4 text-primary" />
-                  <span>Koreksi Typo / Detail Minor</span>
+                  <span>Perbaiki data barang</span>
                 </h3>
-                <p className="text-xs text-muted-foreground">Koreksi kesalahan pengetikan sebelum menyetujui barang</p>
+                <p className="text-xs text-muted-foreground">Periksa informasi, foto, dan lampiran sebelum menyimpan perubahan.</p>
               </div>
-              <button type="button" disabled={isSaving} aria-label="Tutup perubahan barang" onClick={() => setModalMode(null)} className="min-h-11 min-w-11 flex items-center justify-center text-muted-foreground hover:text-foreground focus-ring">
+              <button type="button" disabled={isSaving || isUploadingPhoto} aria-label="Tutup perubahan barang" onClick={() => setModalMode(null)} className="min-h-11 min-w-11 flex items-center justify-center text-muted-foreground hover:text-foreground focus-ring">
                 <X className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
 
             {staleNotice}
-            <div className="space-y-3 text-xs">
+            <fieldset disabled={isSaving || selectedChanged} className="min-w-0 space-y-5 text-sm">
               <div>
-                <label className="text-foreground font-bold block mb-1">Nama Barang</label>
+                <label htmlFor="curation-edit-name" className="text-foreground font-bold block mb-1">Nama Barang</label>
                 <input
+                  id="curation-edit-name"
                   type="text"
                   required
+                  maxLength={200}
                   value={editNama}
                   onChange={(e) => setEditNama(e.target.value)}
                   className="w-full bg-muted/40 border border-border rounded-xl px-3 py-2 text-foreground"
@@ -808,8 +853,9 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-foreground font-bold block mb-1">Kategori</label>
+                <label htmlFor="curation-edit-category" className="text-foreground font-bold block mb-1">Kategori</label>
                   <select
+                    id="curation-edit-category"
                     value={editKategori}
                     onChange={(e) => setEditKategori(e.target.value as CategoryType)}
                     className="w-full bg-muted/40 border border-border rounded-xl px-3 py-2 text-foreground"
@@ -823,11 +869,14 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
                 </div>
 
                 <div>
-                  <label className="text-foreground font-bold block mb-1">Harga Limit Awal (IDR)</label>
+                  <label htmlFor="curation-edit-price" className="text-foreground font-bold block mb-1">Harga Limit Awal (IDR)</label>
                   <input
+                    id="curation-edit-price"
                     type="number"
                     required
                     min={100000}
+                    max={9999999999999}
+                    step={1}
                     value={editHargaAwal}
                     onChange={(e) => setEditHargaAwal(e.target.value)}
                     className="w-full bg-muted/40 border border-border rounded-xl px-3 py-2 text-foreground font-mono"
@@ -836,11 +885,15 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </div>
 
               <div>
-                <label className="text-foreground font-bold block mb-1">
+                <label htmlFor="curation-edit-reserve" className="text-foreground font-bold block mb-1">
                   Reserve Price (Opsional IDR)
                 </label>
                 <input
+                  id="curation-edit-reserve"
                   type="number"
+                  min={0}
+                  max={9999999999999}
+                  step={1}
                   placeholder="Kosongkan jika tanpa reserve price"
                   value={editReservePrice}
                   onChange={(e) => setEditReservePrice(e.target.value)}
@@ -849,31 +902,41 @@ export const AdminC2CKurasi: React.FC<AdminC2CKurasiProps> = ({ onNavigate }) =>
               </div>
 
               <div>
-                <label className="text-foreground font-bold block mb-1">Deskripsi Barang</label>
+                <label htmlFor="curation-edit-description" className="text-foreground font-bold block mb-1">Deskripsi Barang</label>
                 <textarea
+                  id="curation-edit-description"
                   rows={3}
                   required
+                  maxLength={20000}
                   value={editDeskripsi}
                   onChange={(e) => setEditDeskripsi(e.target.value)}
                   className="w-full bg-muted/40 border border-border rounded-xl p-3 text-xs text-foreground outline-none"
                 ></textarea>
               </div>
-            </div>
+              <div className="space-y-3 border-t border-border pt-4">
+                <LotPhotoInput photos={editPhotos} onChange={setEditPhotos} onBusyChange={setIsUploadingPhoto} disabled={isSaving || selectedChanged} />
+              </div>
+              <div className="space-y-2 border-t border-border pt-4">
+                <label htmlFor="curation-documents" className="block font-semibold">Tautan dokumen pendukung</label>
+                <p id="curation-documents-help" className="text-xs leading-5 text-muted-foreground">Satu tautan HTTP/HTTPS per baris, maksimal 12 dokumen. Kosongkan jika tidak ada. Teks lama tetap ditampilkan untuk diperiksa; ganti dengan tautan yang sesuai atau hapus barisnya jika tidak diperlukan.</p>
+                <textarea id="curation-documents" rows={4} maxLength={49163} value={editDocuments} onChange={event => setEditDocuments(event.target.value)} aria-describedby="curation-documents-help" className="catalog-input resize-y" placeholder="https://contoh.com/sertifikat.pdf" />
+              </div>
+            </fieldset>
 
             <div className="pt-2 flex gap-2">
               <button
                 type="button"
-                disabled={isSaving}
+                disabled={isSaving || isUploadingPhoto}
                 onClick={() => setModalMode(null)}
                 className="w-1/3 py-2.5 bg-muted text-muted-foreground rounded-xl text-xs font-bold border border-border cursor-pointer"
               >
                 Batal
               </button>
               <button
-                type="submit" disabled={isSaving || selectedChanged}
+                type="submit" disabled={isSaving || isUploadingPhoto || selectedChanged || !dataReady}
                 className="w-2/3 py-2.5 bg-primary text-primary-foreground rounded-xl text-xs font-bold border border-border shadow-sm hover:opacity-90 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
               >
-                Simpan Perubahan
+                {isSaving ? 'Menyimpan...' : isUploadingPhoto ? 'Menunggu foto...' : 'Simpan Perubahan'}
               </button>
             </div>
           </form>

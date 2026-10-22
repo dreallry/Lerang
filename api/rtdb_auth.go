@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 )
@@ -28,10 +27,6 @@ func rtdbClaimsFromRequest(r *http.Request) *RTDBClaims {
 
 func withRTDBClaims(r *http.Request, claims *RTDBClaims) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), rtdbClaimsContextKey, claims))
-}
-
-func requireRTDBIdentity(next http.HandlerFunc) http.HandlerFunc {
-	return FirebaseIdentityRequired(next)
 }
 
 func rtdbLoadClaims(ctx context.Context, identity *FirebaseIdentity) (*RTDBClaims, error) {
@@ -71,7 +66,7 @@ func rtdbLoadClaims(ctx context.Context, identity *FirebaseIdentity) (*RTDBClaim
 		return nil, err
 	}
 	if len(user) == 0 || rtdbNumericID(user["id_user"]) <= 0 {
-		return nil, sql.ErrNoRows
+		return nil, domainError(http.StatusForbidden, "Akun belum memiliki profil di Realtime Database")
 	}
 	return &RTDBClaims{
 		ID:            rtdbNumericID(user["id_user"]),
@@ -84,7 +79,7 @@ func rtdbLoadClaims(ctx context.Context, identity *FirebaseIdentity) (*RTDBClaim
 	}, nil
 }
 
-func rtdbAuthenticated(next http.HandlerFunc) http.HandlerFunc {
+func RtdbAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		raw, ok := bearerToken(r)
 		if !ok {
@@ -97,10 +92,6 @@ func rtdbAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		claims, err := rtdbLoadClaims(r.Context(), identity)
-		if errors.Is(err, sql.ErrNoRows) {
-			Error(w, http.StatusForbidden, "Akun belum memiliki profil di Realtime Database")
-			return
-		}
 		if err != nil {
 			rtdbJSONError(w, err)
 			return
@@ -109,17 +100,13 @@ func rtdbAuthenticated(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func RtdbAuthenticated(next http.HandlerFunc) http.HandlerFunc { return rtdbAuthenticated(next) }
-
-func RtdbRole(roles ...UserRole) func(http.HandlerFunc) http.HandlerFunc { return rtdbRole(roles...) }
-
-func rtdbRole(roles ...UserRole) func(http.HandlerFunc) http.HandlerFunc {
+func RtdbRole(roles ...UserRole) func(http.HandlerFunc) http.HandlerFunc {
 	allowed := make(map[UserRole]bool, len(roles))
 	for _, role := range roles {
 		allowed[role] = true
 	}
 	return func(next http.HandlerFunc) http.HandlerFunc {
-		return rtdbAuthenticated(func(w http.ResponseWriter, r *http.Request) {
+		return RtdbAuthenticated(func(w http.ResponseWriter, r *http.Request) {
 			claims := rtdbClaimsFromRequest(r)
 			if claims == nil || !allowed[claims.Role] {
 				Error(w, http.StatusForbidden, "akses ditolak")
@@ -138,24 +125,4 @@ func stringValue(value interface{}, fallback string) string {
 		return text
 	}
 	return fallback
-}
-
-func rtdbUserByID(ctx context.Context, id int) (map[string]interface{}, string, error) {
-	var uid string
-	if err := rtdbGet(ctx, "user_ids/"+rtdbPathID(id), &uid); err == nil && uid != "" {
-		var profile map[string]interface{}
-		if err := rtdbGet(ctx, "users/"+uid, &profile); err == nil && len(profile) > 0 && rtdbNumericID(profile["id_user"]) == id {
-			return profile, uid, nil
-		}
-	}
-	var users map[string]map[string]interface{}
-	if err := rtdbGet(ctx, "users", &users); err != nil {
-		return nil, "", err
-	}
-	for uid, profile := range users {
-		if rtdbNumericID(profile["id_user"]) == id {
-			return profile, uid, nil
-		}
-	}
-	return nil, "", sql.ErrNoRows
 }

@@ -120,6 +120,18 @@ func TestInactiveStaffCannotRestoreAccess(t *testing.T) {
 	}
 }
 
+func TestRTDBAuthenticationRequiresRegisteredProfile(t *testing.T) {
+	token := fixtureAuth(t, false, 0)
+	fixtureRTDB(t, nil, "")
+	r := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	w := httptest.NewRecorder()
+	NewHandler().ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "Akun belum memiliki profil di Realtime Database") {
+		t.Fatalf("missing RTDB profile must return the registration requirement: %d %s", w.Code, w.Body)
+	}
+}
+
 func TestStaffIdentityMustMatchTheProfile(t *testing.T) {
 	fixtureRTDB(t, map[string]interface{}{"staff/fixture-staff.json": map[string]interface{}{
 		"uid": "another-uid", "id_petugas": 3, "id_level": 1, "role": "administrator", "active": true,

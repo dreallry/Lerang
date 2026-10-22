@@ -14,6 +14,54 @@ func pendingReviewItem() map[string]interface{} {
 	return map[string]interface{}{"id_barang": 1, "id_user": 3, "nama_barang": "Fixture pending", "kategori": "Lainnya", "harga_awal": 100000, "status_verifikasi": "pending", "updated_at": "2026-10-20T09:00:00Z"}
 }
 
+func TestItemRevisionsAdvancePastExistingVersions(t *testing.T) {
+	for _, action := range []string{"edit", "curation"} {
+		t.Run(action, func(t *testing.T) {
+			previousTime := time.Now().Add(time.Hour)
+			previous := previousTime.UTC().Format(time.RFC3339Nano)
+			item := pendingReviewItem()
+			item["updated_at"] = previous
+			root := map[string]interface{}{"items": map[string]interface{}{"1": item}}
+			var saved map[string]interface{}
+			if action == "edit" {
+				err := updateItemInTree(root, &RTDBClaims{ID: 5, Role: RolePetugas}, "1", map[string]interface{}{"nama_barang": "Fixture changed", "expected_updated_at": previous})
+				requireNoError(t, err)
+				saved = treeRecord(root, "items", "1")
+			} else {
+				snapshot := paymentRTDBFixture(t, root)
+				w := httptest.NewRecorder()
+				body := fmt.Sprintf(`{"status":"rejected","catatan_kurasi":"Fixture decision","expected_updated_at":%q}`, previous)
+				ValidateBarangRTDB(w, operationRequest("POST", body, "1", &RTDBClaims{ID: 5, Role: RolePetugas}))
+				if w.Code != 200 {
+					t.Fatalf("curation failed: %d %s", w.Code, w.Body)
+				}
+				saved = treeRecord(snapshot(), "items", "1")
+			}
+			current, err := time.Parse(time.RFC3339Nano, stringValue(saved["updated_at"], ""))
+			if err != nil || !current.After(previousTime) || checkItemRevision(saved, &previous) == nil {
+				t.Fatal("an item change did not invalidate its previous version after the clock moved backward")
+			}
+		})
+	}
+}
+
+func TestNextRevisionKeepsUTCAndAdvancesEqualOrEarlierClocks(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.FixedZone("WIB", 7*3600))
+	for _, previous := range []string{"", "legacy timestamp", now.Add(-time.Second).Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), now.Add(time.Second).Format(time.RFC3339Nano)} {
+		got := nextRevision(previous, now)
+		parsed, err := time.Parse(time.RFC3339Nano, got)
+		if err != nil || got[len(got)-1] != 'Z' {
+			t.Fatalf("revision must be a UTC timestamp: %q", got)
+		}
+		if prior, err := time.Parse(time.RFC3339Nano, previous); err == nil && !parsed.After(prior) {
+			t.Fatalf("revision %q did not advance past %q", got, previous)
+		}
+		if parsed.Before(now) {
+			t.Fatal("revision moved behind the supplied clock")
+		}
+	}
+}
+
 func TestRegistrationCannotClaimAnActiveUIDThroughAnOldEmail(t *testing.T) {
 	root := map[string]interface{}{}
 	treeNode(root, "users")["active-owner"] = map[string]interface{}{"id_user": 7, "firebase_uid": "active-owner", "email": "fixture@example.invalid", "saldo_wallet": 450000, "saldo_hold": 0}

@@ -15,6 +15,7 @@ import api from '../../services/api';
 import { authErrorMessage } from '../../utils/authErrors';
 import { parseSessionProfile } from '../../utils/sessionProfile';
 import { useAuction } from '../../context/AuctionContext';
+import { useFormFeedback } from '../common/FormFeedback';
 
 interface RegisterPageProps {
   onNavigate: (view: string, id?: number) => void;
@@ -38,7 +39,12 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
   });
 
   const [showPassword, setShowPassword] = useState(false);
-  const [errorMessage, setErrorMessage] = useState(() => sessionStorage.getItem('lerang_profile_recovery_notice') || '');
+  const { showError, clearFeedback } = useFormFeedback();
+  const [errorMessage, setErrorMessageState] = useState(() => sessionStorage.getItem('lerang_profile_recovery_notice') || '');
+  const setErrorMessage = (message: string) => {
+    setErrorMessageState(message);
+    if (message) showError(message); else clearFeedback();
+  };
   useEffect(() => { sessionStorage.removeItem('lerang_profile_recovery_notice'); }, []);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [verificationWarning, setVerificationWarning] = useState('');
@@ -99,7 +105,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
         }
       }
 
-      let registrationResponse: any;
+      let registrationResponse: Awaited<ReturnType<typeof api.registerMasyarakat>>;
       try {
         registrationResponse = await api.registerMasyarakat({
           nik: formData.nik,
@@ -117,7 +123,7 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigate }) => {
         }
       }
 
-      let response: any;
+      let response: { data: Record<string, unknown> };
       try {
         response = await api.me();
       } catch {

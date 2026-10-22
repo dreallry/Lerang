@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeBarang, normalizeLelang, normalizeHistory, mergeBarang, documentLinkError, itemRevision } from '../src/utils/catalogData.ts';
+import { normalizeBarang, normalizeLelang, normalizeHistory, mergeBarang, documentLinkError, itemRevision, joinAuctions } from '../src/utils/catalogData.ts';
 
 test('the RTDB joined auction response retains IDs, status, times and zero deposit', () => {
   const auction = normalizeLelang({ lelang: { id_lelang: '4', id_barang: '8', id_user: '2', status: 'dibuka', uang_jaminan: 0, harga_akhir: '150000', kelipatan_minimal: '50000', tgl_mulai: '2026-10-19T10:00:00Z', tgl_selesai: '2026-10-20T10:00:00Z' }, barang: {id_barang:8} });
@@ -52,4 +52,39 @@ test('item revision retains exact server precision and supports dated legacy ite
   assert.equal(itemRevision({ created_at: 'older', tanggal: 'oldest' }), 'older');
   assert.equal(itemRevision({ tanggal: 'oldest' }), 'oldest');
   assert.equal(itemRevision({ tanggal: '' }), '');
+});
+
+test('catalog joins group bid history, retain auction order and leave server arrays unchanged', () => {
+  const items = [normalizeBarang({ id_barang: 8, id_user: 5 }), normalizeBarang({ id_barang: 9 })];
+  const auctions = [normalizeLelang({ id_lelang: 2, id_barang: 9 }), normalizeLelang({ id_lelang: 1, id_barang: 8, id_user: 7, id_petugas: 3 }), normalizeLelang({ id_lelang: 3, id_barang: 99 })];
+  const bids = Object.freeze([
+    Object.freeze(normalizeHistory({ id_history: 'low', id_lelang: 1, id_barang: 8, id_user: 7, nama_user: 'Peserta 7', penawaran_harga: 100 }, auctions)),
+    Object.freeze(normalizeHistory({ id_history: 'other', id_lelang: 2, id_barang: 9, id_user: 8, nama_user: 'Peserta 8', penawaran_harga: 900 }, auctions)),
+    Object.freeze(normalizeHistory({ id_history: 'high', id_lelang: 1, id_barang: 8, id_user: 7, nama_user: 'Peserta 7', penawaran_harga: 200 }, auctions)),
+  ]);
+  const seller = Object.freeze({ id_user: 5, nama_lengkap: 'Penjual' });
+  const officer = Object.freeze({ id_petugas: 3, nama_petugas: 'Petugas' });
+  const joined = joinAuctions(auctions, items, bids, [seller], [officer]);
+
+  assert.deepEqual(joined.map(item => item.lelang.id_lelang), [2, 1]);
+  assert.deepEqual(joined[1].history.map(bid => bid.id_history), ['high', 'low']);
+  assert.equal(joined[1].totalBids, 2);
+  assert.equal(joined[1].penjual, seller);
+  assert.equal(joined[1].petugas, officer);
+  assert.deepEqual(joined[1].penawarTertinggi, { id_user: 7, nama_lengkap: 'Peserta 7' });
+  assert.deepEqual(bids.map(bid => bid.id_history), ['low', 'other', 'high']);
+  assert.notEqual(joined[1].history, bids);
+});
+
+test('catalog joins refresh winner identities and do not invent participant profiles', () => {
+  const item = normalizeBarang({ id_barang: 8 });
+  const auction = normalizeLelang({ id_lelang: 1, id_barang: 8, id_user: 7 });
+  let joined = joinAuctions([auction], [item], [], [], []);
+  assert.equal(joined[0].penawarTertinggi, null);
+  assert.equal(joined[0].penjual, null);
+  assert.equal(joined[0].petugas, null);
+  const winner = { id_user: 7, nama_lengkap: 'Nama terbaru' };
+  joined = joinAuctions([auction], [item], [], [winner], []);
+  assert.equal(joined[0].penawarTertinggi, winner);
+  assert.equal(joined[0].totalBids, 0);
 });

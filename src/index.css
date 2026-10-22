@@ -19,7 +19,7 @@
   --destructive: #b23a3a;
   --destructive-foreground: #ffffff;
   --border: #dedfd9;
-  --input: #c5c9c2;
+  --input: #868c82;
   --ring: #245743;
   --chart-1: #2d6a4f;
   --chart-2: #52b788;
@@ -63,10 +63,10 @@
   --muted-foreground: hsl(145, 12%, 68%);
   --accent: hsl(145, 30%, 20%);
   --accent-foreground: hsl(145, 25%, 88%);
-  --destructive: hsl(0, 55%, 38%);
-  --destructive-foreground: hsl(0, 0%, 98%);
+  --destructive: #e87d7d;
+  --destructive-foreground: #251010;
   --border: hsl(145, 12%, 18%);
-  --input: hsl(145, 12%, 18%);
+  --input: #768878;
   --ring: hsl(145, 45%, 58%);
   --chart-1: hsl(145, 45%, 58%);
   --chart-2: hsl(145, 35%, 50%);
@@ -145,13 +145,13 @@
     border: 1px solid var(--primary);
     border-radius: var(--radius);
     background: var(--primary);
-    color: white;
+    color: var(--primary-foreground);
     font-size: 0.875rem;
     font-weight: 600;
     transition: background-color 150ms, border-color 150ms;
   }
 
-  .button-primary:hover { background: #183e30; border-color: #183e30; }
+  .button-primary:hover { background: color-mix(in srgb, var(--primary) 92%, var(--primary-foreground)); border-color: var(--primary); }
   .button-secondary { background: var(--card); color: var(--foreground); border-color: var(--input); }
   .button-secondary:hover { background: var(--muted); border-color: var(--foreground); }
   .text-link { text-underline-offset: 4px; font-weight: 500; }
@@ -165,6 +165,23 @@
     background: var(--card);
     padding: 0.65rem 0.8rem;
     font-size: 0.875rem;
+  }
+
+  .catalog-input[aria-invalid="true"], .catalog-input:user-invalid {
+    border-color: var(--destructive);
+    outline: 1px solid var(--destructive);
+    outline-offset: 0;
+  }
+
+  .form-feedback {
+    top: max(1rem, env(safe-area-inset-top));
+    right: max(1rem, env(safe-area-inset-right));
+    width: min(28rem, calc(100vw - max(1rem, env(safe-area-inset-left)) - max(1rem, env(safe-area-inset-right))));
+    max-height: calc(100dvh - max(1rem, env(safe-area-inset-top)) - max(1rem, env(safe-area-inset-bottom)));
+  }
+
+  @media (max-width: 639px) {
+    .catalog-input { font-size: 1rem; }
   }
 
   .catalog-layout { display: grid; gap: 2rem; }

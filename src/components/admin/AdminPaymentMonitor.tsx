@@ -3,12 +3,14 @@ import api, { type AdminPaymentPage, type AdminPaymentStatus } from '../../servi
 import { authErrorMessage } from '../../utils/authErrors';
 import { formatDateIndo, formatRupiah } from '../../utils/formatters';
 import { startPolling } from '../../utils/polling';
+import { useFormFeedback } from '../common/FormFeedback';
 
 const labels: Record<AdminPaymentStatus, string> = {
   pending: 'Menunggu', review_required: 'Perlu pemeriksaan', failed: 'Gagal / berakhir', paid: 'Lunas',
 };
 
 export function AdminPaymentMonitor({ onUpdated }: { onUpdated: () => void }) {
+  const { showError, clearFeedback } = useFormFeedback();
   const [data, setData] = useState<AdminPaymentPage | null>(null);
   const [status, setStatus] = useState<AdminPaymentStatus | ''>('');
   const [search, setSearch] = useState('');
@@ -39,12 +41,12 @@ export function AdminPaymentMonitor({ onUpdated }: { onUpdated: () => void }) {
 
   const sync = async (orderId: string) => {
     if (checking) return;
-    setChecking(orderId); setError(''); setNotice('');
+    setChecking(orderId); setError(''); setNotice(''); clearFeedback();
     try {
       const response = await api.syncAdminPayment(orderId);
       setNotice(`${orderId}: ${labels[response.data.status] || 'status diperbarui'}.`);
       onUpdated();
-    } catch (err) { setNotice(authErrorMessage(err)); }
+    } catch (err) { const message = authErrorMessage(err); setNotice(message); showError(message); }
     finally { await load(); setChecking(''); }
   };
 

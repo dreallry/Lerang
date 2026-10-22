@@ -1,15 +1,39 @@
-// API Client Service untuk Lelang Barang
-// Menghubungkan Frontend React dengan API Go dan Firebase-backed services
-
 import { auth } from '../firebase';
-import type { FulfillmentStatus, TbPembayaran, WalletTransaction } from '../types';
+import type { FulfillmentOrder, FulfillmentStatus, TbBarang, TbLelang, TbPembayaran, TbSesiLelang, TbTheme, WalletTransaction } from '../types';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
 
-interface ApiResponse<T> {
+export interface ApiResponse<T> {
   success: boolean;
   message?: string;
   data: T;
+}
+
+export interface ActionResponse {
+  success: boolean;
+  message?: string;
+  data?: { id_sesi?: number; updated_at?: string; id_transaksi?: string; nominal?: number };
+}
+
+type ExpectedRevision = { expected_updated_at: string };
+export type ItemInput = Pick<TbBarang, 'nama_barang' | 'harga_awal' | 'kategori' | 'deskripsi_barang' | 'foto_barang'>
+  & Partial<Pick<TbBarang, 'dokumen_pendukung' | 'spesifikasi' | 'reserve_price' | 'estimasi_pasar'>>;
+export type ItemUpdate = Partial<ItemInput> & ExpectedRevision;
+export type AuctionInput = Pick<TbLelang, 'tgl_mulai' | 'tgl_selesai' | 'kelipatan_minimal' | 'uang_jaminan'>;
+export type SessionInput = Pick<TbSesiLelang, 'judul' | 'deskripsi' | 'tipe' | 'tgl_mulai' | 'durasi_default_jam' | 'gambar_banner'>
+  & Partial<Pick<TbSesiLelang, 'kurator' | 'id_lelang_list'>>;
+export type ItemReviewInput = ExpectedRevision & {
+  status: 'approved' | 'rejected'; catatan_kurasi: string;
+  kelipatan_minimal?: number; uang_jaminan?: number; reserve_price?: number;
+};
+export type ShippingAddressInput = Required<Pick<FulfillmentOrder, 'nama_penerima' | 'telp_penerima' | 'alamat_lengkap' | 'kota' | 'kode_pos'>> & ExpectedRevision;
+export type ShippingCourierInput = Required<Pick<FulfillmentOrder, 'kurir' | 'layanan_kurir' | 'ongkir'>> & ExpectedRevision;
+export type ShippingPaymentInput = ExpectedRevision & { reference: string; amount: number; courier: string; service: string };
+
+export interface Withdrawal {
+  id: string; nama_lengkap: string; amount: number; bank_name: string;
+  account_number: string; account_holder: string; status: 'pending' | 'paid' | 'rejected';
+  created_at: string; transfer_reference?: string; reason?: string;
 }
 
 type WalletTransactionRecord = Omit<WalletTransaction, 'id_user'> & { id_user?: number };
@@ -70,16 +94,9 @@ export interface AdminPaymentPage {
 }
 
 class ApiService {
-  setToken(_token: null) {
-    try { localStorage.removeItem('lelang_jwt_token'); }
-    catch { /* Firebase owns the active session when browser storage is unavailable. */ }
-  }
-
-  private async request<T = any>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async request<T = ActionResponse>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${API_BASE_URL}${endpoint}`;
-    const headers: Record<string, string> = {
-      ...(options.headers as Record<string, string>),
-    };
+    const headers = new Headers(options.headers);
 
     const owner = auth.currentUser;
     const signal = options.signal || AbortSignal.timeout(30000);
@@ -92,12 +109,12 @@ class ApiService {
     checkSession();
     const token = await owner?.getIdToken();
     checkSession();
-    if (token && !headers['Authorization']) {
-      headers['Authorization'] = `Bearer ${token}`;
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', `Bearer ${token}`);
     }
 
-    if (!(options.body instanceof FormData) && !headers['Content-Type']) {
-      headers['Content-Type'] = 'application/json';
+    if (!(options.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
     }
 
     const response = await fetch(url, {
@@ -126,60 +143,46 @@ class ApiService {
     telp: string;
     alamat?: string;
   }) {
-    return this.request('/auth/register', {
+    return this.request<ApiResponse<Record<string, unknown>>>('/auth/register', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async me() {
-    return this.request('/auth/me');
+    return this.request<ApiResponse<Record<string, unknown>>>('/auth/me');
   }
 
   async syncGoogleProfile() {
-    return this.request('/auth/google-profile', { method: 'POST' });
+    return this.request<ApiResponse<{ profile_required: boolean }>>('/auth/google-profile', { method: 'POST' });
   }
 
   async getStaff() {
-    return this.request('/admin/staff');
+    return this.request<ApiResponse<unknown[]>>('/admin/staff');
   }
 
   // ---- BARANG ----
   async getCatalog(kategori?: string) {
     const query = kategori ? `?kategori=${encodeURIComponent(kategori)}` : '';
-    return this.request(`/barang${query}`);
+    return this.request<ApiResponse<Record<string, unknown>[]>>(`/barang${query}`);
   }
 
   async getMyItems() {
-    return this.request('/barang/my');
+    return this.request<ApiResponse<Record<string, unknown>[]>>('/barang/my');
   }
 
   async getAllItems() {
-    return this.request('/admin/barang');
+    return this.request<ApiResponse<Record<string, unknown>[]>>('/admin/barang');
   }
 
-  async getDetailBarang(id: number) {
-    return this.request(`/barang/${id}`);
-  }
-
-  async submitBarang(data: {
-    nama_barang: string;
-    harga_awal: number;
-    kategori: string;
-    deskripsi_barang: string;
-    foto_barang: string[];
-    dokumen_pendukung?: string[];
-    spesifikasi?: Record<string, string>;
-    reserve_price?: number;
-    estimasi_pasar?: number;
-  }) {
+  async submitBarang(data: ItemInput) {
     return this.request('/barang', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
-  async updateBarang(id: number, data: Record<string, unknown> & { expected_updated_at: string }) {
+  async updateBarang(id: number, data: ItemUpdate) {
     return this.request(`/barang/${id}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -201,7 +204,7 @@ class ApiService {
     const formData = new FormData();
     formData.append('foto', file);
 
-    const res = await this.request('/upload', {
+    const res = await this.request<ApiResponse<{ url: string }>>('/upload', {
       method: 'POST',
       body: formData,
       signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : undefined,
@@ -213,11 +216,7 @@ class ApiService {
   // ---- LELANG ----
   async getAuctions(status?: string) {
     const query = status ? `?status=${encodeURIComponent(status)}` : '';
-    return this.request(`/lelang${query}`);
-  }
-
-  async getAuctionDetail(id: number) {
-    return this.request(`/lelang/${id}`);
+    return this.request<ApiResponse<Record<string, unknown>[]>>(`/lelang${query}`);
   }
 
   async placeBid(id: number, amount: number) {
@@ -242,35 +241,19 @@ class ApiService {
   }
 
   async getAllAuctions() {
-    return this.request('/admin/lelang');
+    return this.request<ApiResponse<Record<string, unknown>[]>>('/admin/lelang');
   }
 
   async getAllHistory() {
-    return this.request('/lelang/history');
+    return this.request<ApiResponse<Record<string, unknown>[]>>('/lelang/history');
   }
 
   // ---- ADMIN & KURASI ----
-  async getPendingBarang() {
-    return this.request('/admin/pending-barang');
-  }
-
-  async validasiBarang(id: number, data: {
-    expected_updated_at: string;
-    status: 'approved' | 'rejected';
-    catatan_kurasi: string;
-    kelipatan_minimal?: number;
-    uang_jaminan?: number;
-    reserve_price?: number;
-  }) {
+  async validasiBarang(id: number, data: ItemReviewInput) {
     return this.request(`/admin/barang/${id}/validasi`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
-  }
-
-  // Alur 4: Atur jadwal lelang & durasi
-  async getJadwalHarian() {
-    return this.request('/admin/jadwal-harian');
   }
 
   async aturJadwalHarian(tanggal_lelang: string, jam_buka: string, catatan?: string) {
@@ -278,10 +261,6 @@ class ApiService {
       method: 'POST',
       body: JSON.stringify({ tanggal_lelang, jam_buka, catatan }),
     });
-  }
-
-  async getKategoriDurasi() {
-    return this.request('/admin/kategori-durasi');
   }
 
   async aturDurasiKategori(nama_kategori: string, durasi_jam: number) {
@@ -297,7 +276,7 @@ class ApiService {
     });
   }
 
-  async createOfficerAuction(barang: any, lelang: any) {
+  async createOfficerAuction(barang: ItemInput, lelang: AuctionInput) {
     return this.request('/admin/lelang', {
       method: 'POST',
       body: JSON.stringify({ barang, lelang }),
@@ -312,7 +291,7 @@ class ApiService {
   }
 
   async getUsers() {
-    return this.request('/admin/users');
+    return this.request<ApiResponse<unknown[]>>('/admin/users');
   }
 
   // ---- PEMBAYARAN MIDTRANS & WALLET ----
@@ -349,6 +328,7 @@ class ApiService {
       transactions: WalletTransactionRecord[];
       held_deposits: Record<string, boolean>;
       auto_bids: Record<string, number>;
+      financial_review_required: boolean;
     }>>('/wallet');
   }
 
@@ -374,53 +354,43 @@ class ApiService {
   }
 
   // ---- PENGIRIMAN & FULFILLMENT ----
-  async getWithdrawals() { return this.request('/admin/withdrawals'); }
+  async getWithdrawals() { return this.request<ApiResponse<Withdrawal[]>>('/admin/withdrawals'); }
 
   async reviewWithdrawal(id: string, status: 'paid'|'rejected', reference: string, reason: string) {
     return this.request(`/admin/withdrawals/${encodeURIComponent(id)}`, {method:'POST',body:JSON.stringify({status,reference,reason})});
   }
   async getFulfillments() {
-    return this.request('/fulfillment');
+    return this.request<ApiResponse<unknown[]>>('/fulfillment');
   }
 
   async getCouriers() {
     return this.request<ApiResponse<CourierOption[]>>('/fulfillment/couriers');
   }
 
-  async updateFulfillmentCourier(id: string, data: { kurir: string; layanan_kurir: string; ongkir: number; expected_updated_at: string }) {
+  async updateFulfillmentCourier(id: string, data: ShippingCourierInput) {
     return this.request(`/fulfillment/${encodeURIComponent(id)}/courier`, { method: 'POST', body: JSON.stringify(data) });
   }
 
-  async updateFulfillmentAddress(id: string, data: {
-    expected_updated_at: string;
-    nama_penerima: string;
-    telp_penerima: string;
-    alamat_lengkap: string;
-    kota: string;
-    kode_pos: string;
-    kurir?: string;
-    layanan_kurir?: string;
-    ongkir?: number;
-  }) {
-    return this.request(`/fulfillment/${id}/alamat`, {
+  async updateFulfillmentAddress(id: string, data: ShippingAddressInput) {
+    return this.request(`/fulfillment/${encodeURIComponent(id)}/alamat`, {
       method: 'POST',
       body: JSON.stringify(data),
     });
   }
 
   async updateFulfillmentResi(id: string, nomor_resi: string, status: FulfillmentStatus, deskripsi: string | undefined, expectedUpdatedAt: string) {
-    return this.request(`/fulfillment/${id}/resi`, {
+    return this.request(`/fulfillment/${encodeURIComponent(id)}/resi`, {
       method: 'POST',
       body: JSON.stringify({ nomor_resi, status, deskripsi, expected_updated_at: expectedUpdatedAt }),
     });
   }
 
-  async recordShippingPayment(id: string, data: { reference: string; amount: number; courier: string; service: string; expected_updated_at: string }) {
+  async recordShippingPayment(id: string, data: ShippingPaymentInput) {
     return this.request(`/fulfillment/${encodeURIComponent(id)}/shipping-payment`, { method: 'POST', body: JSON.stringify(data) });
   }
 
   async selesaikanOrder(id: string, rating: number, ulasan: string) {
-    return this.request(`/fulfillment/${id}/selesai`, {
+    return this.request(`/fulfillment/${encodeURIComponent(id)}/selesai`, {
       method: 'POST',
       body: JSON.stringify({ rating, ulasan }),
     });
@@ -428,19 +398,10 @@ class ApiService {
 
   // ---- SESI & THEMES ----
   async getSessions() {
-    return this.request('/sesi');
+    return this.request<ApiResponse<TbSesiLelang[]>>('/sesi');
   }
 
-  async createSession(data: {
-    judul: string;
-    deskripsi: string;
-    tipe: string;
-    tgl_mulai: string;
-    durasi_default_jam: number;
-    gambar_banner: string;
-    kurator?: string;
-    id_lelang_list?: number[];
-  }) {
+  async createSession(data: SessionInput) {
     return this.request('/sesi', {
       method: 'POST',
       body: JSON.stringify(data),
@@ -464,16 +425,16 @@ class ApiService {
   }
 
   async getThemes() {
-    return this.request('/themes');
+    return this.request<ApiResponse<TbTheme[]>>('/themes');
   }
 
   // ---- NOTIFIKASI ----
   async getNotifications() {
-    return this.request('/notifikasi');
+    return this.request<ApiResponse<unknown[]>>('/notifikasi');
   }
 
   async markNotifikasiRead(id?: string) {
-    const url = id ? `/notifikasi/${id}/read` : '/notifikasi/read-all';
+    const url = id ? `/notifikasi/${encodeURIComponent(id)}/read` : '/notifikasi/read-all';
     return this.request(url, {
       method: 'POST',
     });

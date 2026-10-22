@@ -185,7 +185,7 @@ export interface NotificationItem {
 export interface AuctionDetailItem {
   lelang: TbLelang;
   barang: TbBarang;
-  penawarTertinggi?: TbMasyarakat | null;
+  penawarTertinggi?: Pick<TbMasyarakat, 'id_user' | 'nama_lengkap'> | null;
   petugas?: TbPetugas | null;
   penjual?: TbMasyarakat | null;
   totalBids: number;

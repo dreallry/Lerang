@@ -16,6 +16,44 @@ func operationRequest(method, body, id string, claims *RTDBClaims) *http.Request
 	return r
 }
 
+func TestConfigurationWritesRecheckStaffAccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, node string
+		handler          http.HandlerFunc
+	}{
+		{"schedule", `{"tanggal_lelang":"2040-01-01","jam_buka":"09:00","catatan":"Fixture"}`, "schedules", SetScheduleRTDB},
+		{"category", `{"nama_kategori":"Fixture","durasi_jam":4}`, "categories", SetCategoryRTDB},
+	} {
+		for _, active := range []bool{false, true} {
+			name := tc.name + "/disabled"
+			if active {
+				name = tc.name + "/active"
+			}
+			t.Run(name, func(t *testing.T) {
+				written := fixtureRTDB(t, map[string]interface{}{"staff/fixture-officer.json": map[string]interface{}{
+					"uid": "fixture-officer", "id_petugas": 5, "id_level": 2, "role": "petugas", "active": active,
+				}}, "")
+				claims := &RTDBClaims{UID: "fixture-officer", ID: 5, Role: RolePetugas}
+				w := httptest.NewRecorder()
+				tc.handler(w, operationRequest("POST", tc.body, "", claims))
+				want := http.StatusForbidden
+				if active {
+					want = http.StatusOK
+				}
+				if w.Code != want {
+					t.Fatalf("configuration write returned %d, want %d: %s", w.Code, want, w.Body)
+				}
+				if active && *written == nil || !active && *written != nil {
+					t.Fatalf("configuration write persisted = %v; active staff = %v", *written != nil, active)
+				}
+				if active && len(treeMap((*written)[tc.node])) != 1 {
+					t.Fatal("authorized configuration was not saved in its collection")
+				}
+			})
+		}
+	}
+}
+
 func TestOfficerDraftWaitsForSessionBeforeOpening(t *testing.T) {
 	now := time.Now()
 	snapshot := paymentRTDBFixture(t, map[string]interface{}{})

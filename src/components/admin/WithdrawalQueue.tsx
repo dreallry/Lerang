@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
-import api from '../../services/api';
+import api, { type Withdrawal } from '../../services/api';
 import { authErrorMessage } from '../../utils/authErrors';
 import { formatRupiah, formatDateIndo } from '../../utils/formatters';
 import { startPolling } from '../../utils/polling';
-
-interface Withdrawal { id:string; nama_lengkap:string; amount:number; bank_name:string; account_number:string; account_holder:string; status:'pending'|'paid'|'rejected'; created_at:string; transfer_reference?:string; reason?:string }
+import { useFormFeedback } from '../common/FormFeedback';
 
 export function WithdrawalQueue() {
+  const { showError, clearFeedback } = useFormFeedback();
   const [rows,setRows]=useState<Withdrawal[]>([]);
   const [error,setError]=useState('');
   const [dataError,setDataError]=useState(false);
@@ -34,14 +34,14 @@ export function WithdrawalQueue() {
   },[saving]);
   const review=async(status:'paid'|'rejected')=>{
     if(saving||dataError)return;
-    if(status==='paid'&&!reference.trim()||status==='rejected'&&!reason.trim()){setError(status==='paid'?'Isi referensi transfer bank yang sudah dilakukan.':'Isi alasan penolakan.');return;}
-    setSaving(true);setError('');
+    if(status==='paid'&&!reference.trim()||status==='rejected'&&!reason.trim()){const message=status==='paid'?'Isi referensi transfer bank yang sudah dilakukan.':'Isi alasan penolakan.';setError(message);showError(message,{target:document.getElementById(status==='paid'?'withdraw-reference':'withdraw-reason')});return;}
+    setSaving(true);setError('');clearFeedback();
     try{
       await api.reviewWithdrawal(selected,status,reference.trim(),reason.trim());
       setRows(previous=>previous.map(row=>row.id===selected?{...row,status,transfer_reference:status==='paid'?reference.trim():undefined,reason:status==='rejected'?reason.trim():undefined}:row));
       setSelected('');setReference('');setReason('');
-      try {setRows(await load());setDataError(false);} catch {setDataError(true);setError('Keputusan sudah tersimpan. Muat ulang daftar untuk memastikan data terbaru.');}
-    }catch(err){setError(authErrorMessage(err));}finally{setSaving(false);}
+      try {setRows(await load());setDataError(false);} catch {const message='Keputusan sudah tersimpan. Muat ulang daftar untuk memastikan data terbaru.';setDataError(true);setError(message);showError(message);}
+    }catch(err){const message=authErrorMessage(err);setError(message);showError(message);}finally{setSaving(false);}
   };
   return <section className="border border-border bg-card p-5 sm:p-6 space-y-5" aria-labelledby="withdrawal-heading">
     <div><h2 id="withdrawal-heading" className="text-xl font-medium">Permintaan penarikan saldo</h2><p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">Transfer dilakukan petugas melalui bank. Catat sebagai selesai setelah transfer berhasil dan referensinya tersedia. Penolakan mengembalikan saldo melalui server.</p></div>

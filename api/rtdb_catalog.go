@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"sort"
@@ -45,12 +46,15 @@ func publicItem(item map[string]interface{}) map[string]interface{} {
 	return result
 }
 
+func itemRevision(item map[string]interface{}) string {
+	return stringValue(item["updated_at"], stringValue(item["created_at"], stringValue(item["tanggal"], "")))
+}
+
 func checkItemRevision(item map[string]interface{}, expected *string) error {
 	if expected == nil {
 		return domainError(400, "Versi barang wajib disertakan. Muat ulang halaman sebelum menyimpan")
 	}
-	current := stringValue(item["updated_at"], stringValue(item["created_at"], stringValue(item["tanggal"], "")))
-	if *expected != current {
+	if *expected != itemRevision(item) {
 		return domainError(409, "Barang sudah diubah atau diproses akun lain. Muat ulang dan periksa kembali sebelum menyimpan")
 	}
 	return nil
@@ -120,13 +124,17 @@ func validateItemData(item map[string]interface{}) error {
 		if len(values) > 12 {
 			return domainError(400, "Maksimal 12 foto atau dokumen per barang")
 		}
-		for _, value := range values {
+		for index, value := range values {
 			if field == "foto_barang" && serverPhotoPath.MatchString(value) {
 				continue
 			}
 			parsed, err := url.Parse(value)
 			if err != nil || len(value) > 4096 || ((parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "") {
-				return domainError(400, "Gunakan tautan foto atau dokumen HTTP/HTTPS yang valid")
+				label := "Foto barang"
+				if field == "dokumen_pendukung" {
+					label = "Tautan dokumen pendukung"
+				}
+				return domainError(400, fmt.Sprintf("%s ke-%d belum valid. Gunakan tautan HTTP/HTTPS; nama dokumen saja tidak dapat dipakai sebagai tautan", label, index+1))
 			}
 		}
 	}
@@ -292,7 +300,7 @@ func updateItemInTree(root map[string]interface{}, claims *RTDBClaims, id string
 	if claims.Role == RoleMasyarakat && status == "rejected" {
 		next["status_verifikasi"], next["catatan_kurasi"] = "pending", ""
 	}
-	next["updated_at"] = now.UTC().Format(time.RFC3339Nano)
+	next["updated_at"] = nextRevision(itemRevision(item), now)
 	treeNode(root, "items")[id] = next
 	for _, value := range treeMap(root["auctions"]) {
 		auction := treeMap(value)
@@ -404,16 +412,20 @@ func ValidateBarangRTDB(w http.ResponseWriter, r *http.Request) {
 		if state != "pending" {
 			return domainError(409, "Hanya pengajuan menunggu kurasi yang dapat diputuskan")
 		}
-		if err := validateItemData(item); err != nil {
-			return err
-		}
-		item["status_verifikasi"], item["catatan_kurasi"], item["updated_at"] = req.Status, strings.TrimSpace(req.CatatanKurasi), now.UTC().Format(time.RFC3339Nano)
-		if req.Status == "approved" {
-			if req.ReservePrice > 0 && req.ReservePrice < numberValue(item["harga_awal"]) {
-				return domainError(400, "Harga cadangan tidak boleh lebih rendah dari harga awal")
+		for _, value := range treeMap(root["auctions"]) {
+			if rtdbNumericID(treeMap(value)["id_barang"]) == id {
+				return domainError(409, "Barang sudah terkait lot lelang. Periksa lot tersebut sebelum mengubah keputusan kurasi")
 			}
-			auctionID := nextTreeID(root, "auctions")
+		}
+		if req.Status == "approved" {
 			item["reserve_price"] = req.ReservePrice
+			if err := validateItemData(item); err != nil {
+				return domainError(400, "Perbaiki data barang sebelum menyetujui: "+err.Error())
+			}
+		}
+		item["status_verifikasi"], item["catatan_kurasi"], item["updated_at"] = req.Status, strings.TrimSpace(req.CatatanKurasi), nextRevision(itemRevision(item), now)
+		if req.Status == "approved" {
+			auctionID := nextTreeID(root, "auctions")
 			treeNode(root, "auctions")[rtdbPathID(auctionID)] = map[string]interface{}{"id_lelang": auctionID, "id_barang": id, "id_petugas": rtdbClaimsFromRequest(r).ID, "status": "draft", "tgl_mulai": "", "tgl_selesai": "", "durasi_jam": 8, "kelipatan_minimal": req.KelipatanMinimal, "uang_jaminan": req.UangJaminan, "harga_awal": item["harga_awal"], "harga_akhir": 0, "id_user": nil, "reserve_price": req.ReservePrice, "is_reserve_met": false, "created_at": now.UTC().Format(time.RFC3339Nano)}
 		}
 		uid := stringValue(item["firebase_uid"], userUID(root, rtdbNumericID(item["id_user"])))

@@ -35,7 +35,6 @@ type FirebaseIdentity struct {
 var (
 	firebaseInitOnce       sync.Once
 	firebaseInitErr        error
-	firebaseApp            *firebase.App
 	firebaseAuth           *auth.Client
 	firebaseStorage        *firebaseStorageSDK.Client
 	firebaseDatabaseClient *firebaseDB.Client
@@ -85,7 +84,6 @@ func initFirebase() error {
 		return fmt.Errorf("inisialisasi Firebase Authentication gagal: %w", err)
 	}
 
-	firebaseApp = app
 	firebaseAuth = authClient
 
 	if firebaseDatabaseURL != "" {
@@ -135,68 +133,6 @@ func FirebaseStorageReady() bool {
 
 func FirebaseDatabaseReady() bool {
 	return firebaseDatabaseClient != nil && firebaseDatabaseURL != ""
-}
-
-func FirebaseDatabaseURL() string {
-	return firebaseDatabaseURL
-}
-
-func FirebaseDatabase() *firebaseDB.Client {
-	return firebaseDatabaseClient
-}
-
-// SyncLelangToRealtimeDB menyinkronkan data lelang terkini ke Firebase Realtime Database
-func SyncLelangToRealtimeDB(ctx context.Context) error {
-	if firebaseDatabaseClient == nil || DB == nil {
-		return nil
-	}
-	ref := firebaseDatabaseClient.NewRef("lelang")
-	rows, err := DB.QueryContext(ctx, `
-		SELECT l.id_lelang, l.id_barang, b.nama_barang, b.kategori,
-		       l.harga_awal, l.harga_akhir, l.status, l.tgl_mulai, l.tgl_selesai
-		FROM tb_lelang l
-		JOIN tb_barang b ON b.id_barang = l.id_barang
-	`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	data := make(map[string]any)
-	for rows.Next() {
-		var idLelang, idBarang int
-		var namaBarang, kategori, status, tglMulai, tglSelesai string
-		var hargaAwal, hargaAkhir float64
-		if err := rows.Scan(&idLelang, &idBarang, &namaBarang, &kategori,
-			&hargaAwal, &hargaAkhir, &status, &tglMulai, &tglSelesai); err != nil {
-			continue
-		}
-		data[fmt.Sprintf("lot_%d", idLelang)] = map[string]any{
-			"id_lelang":   idLelang,
-			"id_barang":   idBarang,
-			"nama_barang": namaBarang,
-			"kategori":    kategori,
-			"harga_awal":  hargaAwal,
-			"harga_akhir": hargaAkhir,
-			"status":      status,
-			"tgl_mulai":   tglMulai,
-			"tgl_selesai": tglSelesai,
-			"updated_at":  time.Now().Format(time.RFC3339),
-		}
-	}
-	if err := ref.Set(ctx, data); err != nil {
-		log.Printf("Peringatan: Gagal sync ke Realtime Database: %v", err)
-		return err
-	}
-	sysRef := firebaseDatabaseClient.NewRef("system")
-	_ = sysRef.Set(ctx, map[string]any{
-		"balai":     "Lerang Official Auction House",
-		"status":    "online",
-		"last_sync": time.Now().Format(time.RFC3339),
-		"server":    "Golang Native",
-	})
-	log.Println("Sinkronisasi data lelang ke Firebase Realtime Database berhasil!")
-	return nil
 }
 
 func VerifyFirebaseIDToken(ctx context.Context, idToken string) (*FirebaseIdentity, error) {
