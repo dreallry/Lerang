@@ -51,7 +51,7 @@ Copy `.env.example` to `.env` and replace the placeholders with your own setting
 | `FIREBASE_DATABASE_URL` | RTDB URL; must match `VITE_FIREBASE_DATABASE_URL`. |
 | `FIREBASE_STORAGE_BUCKET` | Optional server-side bucket configuration for uploads. |
 | `PHOTO_UPLOAD_DIR` | Server photo directory used when Firebase Storage is unavailable. |
-| `MIDTRANS_MERCHANT_ID`, `MIDTRANS_SERVER_KEY`, `MIDTRANS_CLIENT_KEY` | Credentials from one Sandbox account. |
+| `MIDTRANS_SERVER_KEY`, `MIDTRANS_CLIENT_KEY` | Credentials from one Sandbox account. |
 | `MIDTRANS_IS_PRODUCTION` | Keep `false` for development. |
 | `VITE_API_BASE_URL`, `VITE_APP_URL` | API path and frontend URL. Defaults: `/api` and `http://localhost:5173`. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins. |
@@ -64,19 +64,17 @@ Apply `database.rules.json` to RTDB. These rules deny direct client access; data
 
 ### 3. Start the application
 
-Run the API in one terminal:
-
-```sh
-go run .
-```
-
-Run the frontend in another:
+Start the Go API and frontend together:
 
 ```sh
 npm run dev
 ```
 
-Open `http://localhost:5173`. Vite proxies `/api` to Go on port `8080`. Restart both after changing environment settings.
+Open `http://localhost:5173`. The command builds Go, waits for its Firebase configuration and a successful catalog read, then starts Vite. It reuses a recognized API only if that catalog read succeeds and only stops processes it started. Use `npm run check:firebase` for separate Auth and Storage checks.
+
+Vite proxies `/api` to Go on `PORT` (default `8080`). Restart both after changing environment settings. If the frontend is already running, use `npm run dev:api` to start only the missing API. For separate terminals, use `npm run dev:api` and `npm run dev:web`; the frontend alone cannot load the catalog or verify account roles.
+
+If you use a manually built `server.exe`, stop it and rebuild with `go build -o server.exe .` after backend changes. An old executable continues running old code even when the source files have been updated. The development command builds a fresh API when no API is running.
 
 A new database starts empty. Create a staff account, add a lot, then assign it to an auction session.
 
@@ -125,7 +123,7 @@ npm run build
 | `npm run preview` | Preview the frontend build; keep the Go API running. |
 | `npm run build:auth` | Build standalone email action pages into `dist-auth/`. |
 
-The Firebase check flags missing Storage even with disk uploads configured; review individual results. The payment check validates Server Key access; checkout is needed to confirm the Client Key pairing.
+The Firebase check accepts the configured server photo directory when Storage is unavailable. Go checks whether that directory can be opened at startup. The payment check validates Server Key access; checkout is needed to confirm the Client Key pairing.
 
 ## Deployment
 

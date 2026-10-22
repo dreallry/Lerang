@@ -11,14 +11,6 @@ import (
 	firebaseDB "firebase.google.com/go/v4/db"
 )
 
-type transactionError struct {
-	status  int
-	message string
-}
-
-func (e *transactionError) Error() string          { return e.message }
-func domainError(status int, message string) error { return &transactionError{status, message} }
-
 func treeMap(value interface{}) map[string]interface{} {
 	result, _ := value.(map[string]interface{})
 	if list, ok := value.([]interface{}); ok {

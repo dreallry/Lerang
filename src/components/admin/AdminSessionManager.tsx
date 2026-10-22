@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuction } from '../../context/AuctionContext';
 import { SesiType, TbSesiLelang } from '../../types';
 import { AdminDialog } from '../common/AdminDialog';
+import { useFormFeedback } from '../common/FormFeedback';
 import { formatRupiah, formatDateIndo, calculateTimeLeft, toDateTimeLocal } from '../../utils/formatters';
 import {
   CalendarDays,
@@ -59,7 +60,13 @@ export const AdminSessionManager: React.FC<AdminSessionManagerProps> = ({ onNavi
   const [isSaving, setIsSaving] = useState(false);
   const [activeTab, setActiveTab] = useState<'pool' | 'upcoming' | 'live' | 'closed'>('pool');
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const { showError, clearFeedback } = useFormFeedback();
+  const [toast, setToastState] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const setToast = (notice: typeof toast) => {
+    setToastState(notice);
+    if (notice?.type === 'error') showError(notice.message);
+    else if (notice) clearFeedback();
+  };
 
   // Selected lots from Lot Pool for bulk assignment
   const [selectedPoolLotIds, setSelectedPoolLotIds] = useState<number[]>([]);
@@ -173,8 +180,8 @@ export const AdminSessionManager: React.FC<AdminSessionManagerProps> = ({ onNavi
 
   // Create session submit
   const handleCreateSessionSubmit = async (e: React.FormEvent) => {
-    if (isSaving) return;
     e.preventDefault();
+    if (isSaving) return;
     if (!judul.trim()) {
       setToast({ type: 'error', message: 'Judul sesi lelang wajib diisi.' });
       return;

@@ -30,7 +30,7 @@ import type { AuctionDetailItem } from '../../types';
 interface LiveAuctionRoomProps {
   lelangId: number;
   onBack: () => void;
-  onNavigate: (view: string) => void;
+  onNavigate: (view: string, id?: number) => void;
   onSelectAuction?: (lelangId: number) => void;
 }
 
@@ -356,7 +356,7 @@ const AuctionRoomContent: React.FC<LiveAuctionRoomProps & { auctionData: Auction
                 auction={rel}
                 onSelect={(id) => {
                   if (onSelectAuction) onSelectAuction(id);
-                  else onNavigate('auction-detail');
+                  else onNavigate('auction-detail', id);
                 }}
                 imageAspectRatio="portrait"
               />

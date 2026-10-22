@@ -94,8 +94,9 @@ func appendTracking(order map[string]interface{}, status, description string, no
 	if history == nil {
 		history = []interface{}{}
 	}
-	order["status"], order["tgl_update"] = status, now.UTC().Format(time.RFC3339Nano)
-	order["tracking_history"] = append([]interface{}{map[string]interface{}{"status": status, "deskripsi": description, "waktu": now.UTC().Format(time.RFC3339Nano)}}, history...)
+	revision := nextRevision(stringValue(order["tgl_update"], ""), now)
+	order["status"], order["tgl_update"] = status, revision
+	order["tracking_history"] = append([]interface{}{map[string]interface{}{"status": status, "deskripsi": description, "waktu": revision}}, history...)
 }
 
 func UpdateFulfillmentAddressRTDB(w http.ResponseWriter, r *http.Request) {

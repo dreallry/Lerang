@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { GuestGuardView } from '../common/GuestGuardView';
+import { useFormFeedback } from '../common/FormFeedback';
 import type { CourierOption } from '../../services/api';
 import { isPickup, recipientReady } from '../../utils/shipping';
 
@@ -64,6 +65,12 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
   // Success message toast
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionFailed, setActionFailed] = useState(false);
+  const { showError, clearFeedback } = useFormFeedback();
+  const reportAction = (message: string, failed: boolean) => {
+    setActionMessage(message);
+    setActionFailed(failed);
+    if (failed) showError(message); else clearFeedback();
+  };
 
   // Filter orders
   const relevantOrders = useMemo(() => {
@@ -107,7 +114,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     if (currentOrder) {
       loadRecipient();
       setIsEditingAddress(currentOrder.id_user_pembeli === currentUser?.id_user && !recipientReady(currentOrder));
-      setActionMessage(null); setCopiedResi(false);
+      setActionMessage(null); setCopiedResi(false); clearFeedback();
     }
   }, [currentOrder?.id_fulfillment, currentUser?.id_user]);
 
@@ -126,7 +133,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
   const handleSaveAddress = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentOrder || isSaving) return;
-    if (addressChanged) { setActionFailed(true); setActionMessage('Pesanan telah berubah. Muat data penerima terbaru sebelum menyimpan.'); return; }
+    if (addressChanged) { reportAction('Pesanan telah berubah. Muat data penerima terbaru sebelum menyimpan.', true); return; }
     if (
       !addressForm.nama_penerima.trim() ||
       !addressForm.telp_penerima.trim() ||
@@ -134,8 +141,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
       !addressForm.kota.trim() ||
       !addressForm.kode_pos.trim())
     ) {
-      setActionMessage('Mohon lengkapi semua kolom alamat pengiriman.');
-      setActionFailed(true);
+      reportAction('Mohon lengkapi semua kolom alamat pengiriman.', true);
       return;
     }
 
@@ -144,8 +150,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     const res = await updateFulfillmentAddress(orderId, { ...addressForm, expected_updated_at: addressRevision });
     setIsSaving(false);
     if (activeOrder.current !== orderId) return;
-    setActionFailed(!res.success);
-    setActionMessage(res.message);
+    reportAction(res.message, !res.success);
     if (res.success) setIsEditingAddress(false);
   };
 
@@ -163,8 +168,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     setIsSaving(false);
     if (activeOrder.current !== orderId) return;
     if (res.success && res.updated_at) setAddressRevision(res.updated_at);
-    setActionFailed(!res.success);
-    setActionMessage(res.message);
+    reportAction(res.message, !res.success);
   };
 
 
@@ -173,22 +177,20 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
     e.preventDefault();
     if (!currentOrder || isSaving) return;
     if (!ulasanInput.trim()) {
-      setActionMessage('Mohon tuliskan ulasan singkat mengenai kondisi barang yang diterima.');
-      setActionFailed(true);
+      reportAction('Mohon tuliskan ulasan singkat mengenai kondisi barang yang diterima.', true);
       return;
     }
     setIsSaving(true);
     const res = await confirmFulfillmentReceived(currentOrder.id_fulfillment, ratingInput, ulasanInput);
     setIsSaving(false);
-    setActionFailed(!res.success);
-    setActionMessage(res.message);
+    reportAction(res.message, !res.success);
   };
 
 
   // Copy resi
   const handleCopyResi = async (resi: string) => {
     try { await navigator.clipboard.writeText(resi); setCopiedResi(true); setTimeout(() => setCopiedResi(false), 2000); }
-    catch { setActionFailed(true); setActionMessage('Nomor resi belum dapat disalin. Salin langsung dari tampilan pesanan.'); }
+    catch { reportAction('Nomor resi belum dapat disalin. Salin langsung dari tampilan pesanan.', true); }
   };
 
   // Associated item & invoice data
@@ -242,7 +244,7 @@ export const UserFulfillment: React.FC<UserFulfillmentProps> = ({
       </div>
 
       {actionMessage && (
-        <div role={actionFailed ? "alert" : "status"} className={`p-4 border text-xs flex items-center justify-between ${actionFailed ? "border-destructive text-destructive" : "border-border text-foreground"}`}>
+        <div role={actionFailed ? undefined : "status"} className={`p-4 border text-xs flex items-center justify-between ${actionFailed ? "border-destructive text-destructive" : "border-border text-foreground"}`}>
           <div className="flex items-center gap-2">
             {!actionFailed && <CheckCircle2 className="w-4 h-4 text-primary flex-shrink-0" />}
             <span>{actionMessage}</span>

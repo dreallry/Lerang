@@ -41,6 +41,28 @@ func shippingCall(t *testing.T, handler http.HandlerFunc, claims *RTDBClaims, bo
 	}
 }
 
+func TestShippingRevisionsAdvanceWhenTheClockDoesNot(t *testing.T) {
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	order := map[string]interface{}{"tgl_update": now.Format(time.RFC3339Nano)}
+	for _, instant := range []time.Time{now, now.Add(-time.Hour), now} {
+		previous := stringValue(order["tgl_update"], "")
+		appendTracking(order, "dikemas", "Fixture revision", instant)
+		current := stringValue(order["tgl_update"], "")
+		before, _ := time.Parse(time.RFC3339Nano, previous)
+		after, err := time.Parse(time.RFC3339Nano, current)
+		if err != nil || !after.After(before) {
+			t.Fatalf("revision %q did not advance past %q", current, previous)
+		}
+		if checkFulfillmentRevision(order, &previous) == nil {
+			t.Fatal("an old shipping form remained valid after a change")
+		}
+		history := order["tracking_history"].([]interface{})
+		if treeMap(history[0])["waktu"] != current {
+			t.Fatal("tracking history must use the committed revision time")
+		}
+	}
+}
+
 func TestShippingMutationsRejectAStaleDestinationSnapshot(t *testing.T) {
 	snapshot, buyer, staff := shippingFixture(t)
 	shippingCall(t, UpdateFulfillmentAddressRTDB, buyer, shippingAddress(), 200)

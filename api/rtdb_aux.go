@@ -111,8 +111,12 @@ func SetScheduleRTDB(w http.ResponseWriter, r *http.Request) {
 		Error(w, 400, "Tanggal, jam buka, atau catatan jadwal belum valid")
 		return
 	}
-	value := map[string]interface{}{"id_jadwal": req.TanggalLelang, "tanggal_lelang": req.TanggalLelang, "jam_buka": req.JamBuka, "status": "terjadwal", "catatan": req.Catatan, "updated_at": rtdbNow()}
-	if err := rtdbSet(r.Context(), "schedules/"+req.TanggalLelang, value); err != nil {
+	var value map[string]interface{}
+	if err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		value = map[string]interface{}{"id_jadwal": req.TanggalLelang, "tanggal_lelang": req.TanggalLelang, "jam_buka": req.JamBuka, "status": "terjadwal", "catatan": req.Catatan, "updated_at": rtdbNow()}
+		treeNode(root, "schedules")[req.TanggalLelang] = value
+		return nil
+	}); err != nil {
 		rtdbJSONError(w, err)
 		return
 	}
@@ -140,8 +144,12 @@ func SetCategoryRTDB(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := strings.NewReplacer(" ", "_", "&", "and", "/", "_").Replace(strings.ToLower(req.NamaKategori))
-	value := map[string]interface{}{"nama_kategori": req.NamaKategori, "durasi_jam": req.DurasiJam, "updated_at": rtdbNow()}
-	if err := rtdbSet(r.Context(), "categories/"+key, value); err != nil {
+	var value map[string]interface{}
+	if err := rtdbTransaction(r.Context(), func(root map[string]interface{}) error {
+		value = map[string]interface{}{"nama_kategori": req.NamaKategori, "durasi_jam": req.DurasiJam, "updated_at": rtdbNow()}
+		treeNode(root, "categories")[key] = value
+		return nil
+	}); err != nil {
 		rtdbJSONError(w, err)
 		return
 	}

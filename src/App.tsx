@@ -8,7 +8,9 @@ import { AuctionGuide } from './components/common/AuctionGuide';
 
 import { AuctionCatalog } from './components/user/AuctionCatalog';
 import { authPageDestination } from './utils/authFlow';
+import { buildAppHash, parseAppHash } from './utils/navigation';
 import { EmailVerificationNotice } from './components/auth/EmailVerificationNotice';
+import { useFormFeedback } from './components/common/FormFeedback';
 
 const LiveAuctionRoom = lazy(() => import('./components/user/LiveAuctionRoom').then((page) => ({ default: page.LiveAuctionRoom })));
 const ThemeDetailPage = lazy(() => import('./components/user/ThemeDetailPage').then((page) => ({ default: page.ThemeDetailPage })));
@@ -33,52 +35,22 @@ const OperationsCenter = lazy(() => import('./components/admin/OperationsCenter'
 
 const MainLayout: React.FC = () => {
   const { currentRole, sessionStatus, sessionRevision, setPollingView, reloadSession, accountDataStatus, reloadAccountData } = useAuction();
-  const [currentView, setCurrentView] = useState<string>(() => window.location.hash.slice(1).split('?')[0] || 'catalog');
-  const [selectedAuctionId, setSelectedAuctionId] = useState<number | null>(null);
-  const [selectedThemeId, setSelectedThemeId] = useState<number | null>(null);
-  const [selectedSessionId, setSelectedSessionId] = useState<number | null>(null);
-  const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
-  const [catalogSearch, setCatalogSearch] = useState('');
+  const { clearFeedback } = useFormFeedback();
+  const [route, setRoute] = useState(() => parseAppHash(window.location.hash));
+  const currentView = route.view;
+  const [catalogSearch, setCatalogSearch] = useState(() => route.query);
   const [catalogSearchRevision, setCatalogSearchRevision] = useState(0);
+  const invalidRoute = currentView === 'not-found' || ['session-detail', 'theme-detail', 'auction-detail'].includes(currentView) && route.id === null;
+  useEffect(() => { clearFeedback(); }, [currentView, route.id, sessionRevision, clearFeedback]);
 
   useEffect(() => { setPollingView(currentView); }, [currentView, setPollingView]);
 
-  const parseHash = () => {
-    const rawHash = window.location.hash.replace(/^#/, '');
-    if (!rawHash) return { view: 'catalog' };
-
-    const [viewPath, queryString] = rawHash.split('?');
-    const params = new URLSearchParams(queryString || '');
-    const id = params.get('id') ? Number(params.get('id')) : undefined;
-    const invoiceId = params.get('invoiceId') ? Number(params.get('invoiceId')) : undefined;
-
-    return {
-      view: viewPath || 'catalog',
-      id,
-      invoiceId,
-      query: params.get('q') || '',
-    };
-  };
-
-  // Browser popstate listener for back/forward navigation
   useEffect(() => {
     const handlePopState = () => {
-      const parsed = parseHash();
-      setCurrentView(parsed.view);
-      if (parsed.view === 'catalog') setCatalogSearch(parsed.query || '');
-      if (parsed.view === 'session-detail' && parsed.id) setSelectedSessionId(parsed.id);
-      if (parsed.view === 'theme-detail' && parsed.id) setSelectedThemeId(parsed.id);
-      if (parsed.view === 'auction-detail' && parsed.id) setSelectedAuctionId(parsed.id);
-      if (parsed.view === 'fulfillment' && (parsed.invoiceId || parsed.id)) {
-        setSelectedInvoiceId(parsed.invoiceId || parsed.id || null);
-      }
+      const parsed = parseAppHash(window.location.hash);
+      setRoute(parsed);
+      if (parsed.view === 'catalog') setCatalogSearch(parsed.query);
     };
-
-    // On initial load if hash is present
-    if (window.location.hash) {
-      handlePopState();
-    }
-
     window.addEventListener('popstate', handlePopState);
     window.addEventListener('hashchange', handlePopState);
     return () => { window.removeEventListener('popstate', handlePopState); window.removeEventListener('hashchange', handlePopState); };
@@ -87,48 +59,23 @@ const MainLayout: React.FC = () => {
   const authDestination = authPageDestination(currentView, sessionStatus, currentRole);
   useEffect(() => {
     if (!authDestination) return;
-    window.history.replaceState(null, '', `#${authDestination}`);
-    setCurrentView(authDestination);
+    const hash = buildAppHash(authDestination);
+    window.history.replaceState(null, '', hash);
+    setRoute(parseAppHash(hash));
   }, [authDestination]);
 
   const handleNavigate = (view: string, id?: number) => {
-    let hash = `#${view}`;
-    if (view === 'fulfillment') {
-      setSelectedInvoiceId(id ?? null);
-      if (id !== undefined) hash += `?invoiceId=${id}`;
-    } else if (view === 'session-detail') {
-      if (id !== undefined) {
-        setSelectedSessionId(id);
-        hash += `?id=${id}`;
-      }
-    } else if (view === 'theme-detail') {
-      if (id !== undefined) {
-        setSelectedThemeId(id);
-        hash += `?id=${id}`;
-      }
-    } else if (view === 'auction-detail') {
-      if (id !== undefined) {
-        setSelectedAuctionId(id);
-        hash += `?id=${id}`;
-      }
-    }
-
+    const hash = buildAppHash(view, id);
     if (window.location.hash !== hash) {
       window.history.pushState(null, '', hash);
     }
-    setCurrentView(view);
+    setRoute(parseAppHash(hash));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleSelectAuction = (lelangId: number) => {
-    setSelectedAuctionId(lelangId);
-    const hash = `#auction-detail?id=${lelangId}`;
-    if (window.location.hash !== hash) {
-      window.history.pushState(null, '', hash);
-    }
-    setCurrentView('auction-detail');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
+  const handleSelectAuction = (id: number) => handleNavigate('auction-detail', id);
+  const handleSelectTheme = (id: number) => handleNavigate('theme-detail', id);
+  const handleSelectSession = (id: number) => handleNavigate('session-detail', id);
 
   const handleCatalogSearch = (query: string) => {
     setCatalogSearch(query);
@@ -136,28 +83,10 @@ const MainLayout: React.FC = () => {
     handleNavigate('catalog');
     const params = new URLSearchParams();
     if (query) params.set('q', query);
-    window.history.replaceState(null, '', `#catalog${query ? `?${params}` : ''}`);
+    const hash = `#catalog${query ? `?${params}` : ''}`;
+    window.history.replaceState(null, '', hash);
+    setRoute(parseAppHash(hash));
     requestAnimationFrame(() => document.getElementById('catalog-content')?.scrollIntoView({ behavior: 'auto' }));
-  };
-
-  const handleSelectTheme = (themeId: number) => {
-    setSelectedThemeId(themeId);
-    const hash = `#theme-detail?id=${themeId}`;
-    if (window.location.hash !== hash) {
-      window.history.pushState(null, '', hash);
-    }
-    setCurrentView('theme-detail');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleSelectSession = (sesiId: number) => {
-    setSelectedSessionId(sesiId);
-    const hash = `#session-detail?id=${sesiId}`;
-    if (window.location.hash !== hash) {
-      window.history.pushState(null, '', hash);
-    }
-    setCurrentView('session-detail');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   return (
@@ -208,27 +137,33 @@ const MainLayout: React.FC = () => {
         {!['catalog', 'login', 'register', 'reset-password', 'auth-action'].includes(currentView) && (
           <div key={sessionRevision} className="site-container page-shell">
             {currentView === 'guide' && <AuctionGuide onNavigate={handleNavigate} />}
-            {currentView === 'session-detail' && selectedSessionId && (
+            {invalidRoute && (
+              <div role="alert" className="py-12 space-y-4">
+                <p>Tautan tidak lengkap, ID tidak valid, atau halaman tidak ditemukan. Pilih lot, tema, atau sesi dari katalog.</p>
+                <button type="button" onClick={() => handleNavigate('catalog')} className="button-secondary">Kembali ke katalog</button>
+              </div>
+            )}
+            {currentView === 'session-detail' && route.id !== null && (
               <SesiDetailPage
-                sesiId={selectedSessionId}
+                sesiId={route.id}
                 onBack={() => handleNavigate('catalog')}
                 onSelectAuction={handleSelectAuction}
                 onNavigate={handleNavigate}
               />
             )}
 
-            {currentView === 'theme-detail' && selectedThemeId && (
+            {currentView === 'theme-detail' && route.id !== null && (
               <ThemeDetailPage
-                themeId={selectedThemeId}
+                themeId={route.id}
                 onBack={() => handleNavigate('catalog')}
                 onSelectAuction={handleSelectAuction}
                 onNavigate={handleNavigate}
               />
             )}
 
-            {currentView === 'auction-detail' && selectedAuctionId && (
+            {currentView === 'auction-detail' && route.id !== null && (
               <LiveAuctionRoom
-                lelangId={selectedAuctionId}
+                lelangId={route.id}
                 onBack={() => handleNavigate('catalog')}
                 onNavigate={handleNavigate}
                 onSelectAuction={handleSelectAuction}
@@ -243,7 +178,7 @@ const MainLayout: React.FC = () => {
 
             {currentView === 'invoices' && <UserInvoices onNavigate={handleNavigate} />}
             {currentView === 'fulfillment' && (
-              currentRole === 'administrator' || currentRole === 'petugas' ? <AdminFulfillment onNavigate={handleNavigate} selectedInvoiceId={selectedInvoiceId} /> : <UserFulfillment onNavigate={handleNavigate} selectedInvoiceId={selectedInvoiceId} />
+              currentRole === 'administrator' || currentRole === 'petugas' ? <AdminFulfillment onNavigate={handleNavigate} selectedInvoiceId={route.invoiceId} /> : <UserFulfillment onNavigate={handleNavigate} selectedInvoiceId={route.invoiceId} />
             )}
             {currentView === 'journey' && <UserJourney onNavigate={handleNavigate} />}
 

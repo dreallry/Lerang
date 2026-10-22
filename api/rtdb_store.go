@@ -54,34 +54,14 @@ func rtdbValueForType(value interface{}, target reflect.Type) interface{} {
 	return result
 }
 
-func rtdbSet(ctx context.Context, path string, value any) error {
-	ref, err := rtdbRef(path)
-	if err != nil {
-		return err
-	}
-	if err := ref.Set(ctx, value); err != nil {
-		return err
-	}
-	invalidatePublicReads()
-	return nil
-}
-
-func rtdbUpdate(ctx context.Context, updates map[string]interface{}) error {
-	if firebaseDatabaseClient == nil {
-		return ErrRTDBUnavailable
-	}
-	if err := firebaseDatabaseClient.NewRef("").Update(ctx, updates); err != nil {
-		return err
-	}
-	invalidatePublicReads()
-	return nil
-}
-
-func rtdbDelete(ctx context.Context, path string) error {
-	return rtdbSet(ctx, path, nil)
-}
-
 func rtdbNow() string { return time.Now().UTC().Format(time.RFC3339) }
+
+func nextRevision(previous string, now time.Time) string {
+	if prior, err := time.Parse(time.RFC3339Nano, previous); err == nil && !now.After(prior) {
+		now = prior.Add(time.Nanosecond)
+	}
+	return now.UTC().Format(time.RFC3339Nano)
+}
 
 func rtdbNumericID(value any) int {
 	switch v := value.(type) {
@@ -97,12 +77,6 @@ func rtdbNumericID(value any) int {
 	default:
 		return 0
 	}
-}
-
-func rtdbNextID(ctx context.Context, node string) (int, error) {
-	var id int
-	err := rtdbTransaction(ctx, func(root map[string]interface{}) error { id = nextTreeID(root, node); return nil })
-	return id, err
 }
 
 func rtdbPathID(id int) string { return strconv.Itoa(id) }

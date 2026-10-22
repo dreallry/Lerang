@@ -1,9 +1,6 @@
 package api
 
 import (
-	"database/sql"
-	"errors"
-	"log"
 	"net/http"
 	"strings"
 )
@@ -195,22 +192,4 @@ func ListUsersRTDB(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	JSON(w, http.StatusOK, Response{Success: true, Data: list})
-}
-
-func rtdbJSONError(w http.ResponseWriter, err error) {
-	var actionError *transactionError
-	if errors.As(err, &actionError) {
-		Error(w, actionError.status, actionError.message)
-		return
-	}
-	if errors.Is(err, ErrRTDBUnavailable) {
-		Error(w, http.StatusServiceUnavailable, err.Error())
-		return
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		Error(w, http.StatusNotFound, "Data tidak ditemukan")
-		return
-	}
-	log.Printf("Realtime Database request failed: %v", err)
-	Error(w, http.StatusInternalServerError, "Data belum dapat dimuat atau disimpan. Coba lagi beberapa saat lagi")
 }

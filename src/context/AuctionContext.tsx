@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
-import type { TbMasyarakat, TbPetugas, TbBarang, TbLelang, TbTheme, TbSesiLelang, SesiType, HistoryLelang, TbPembayaran, WalletTransaction, NotificationItem, UserRole, CategoryType, AuctionDetailItem, FulfillmentOrder, FulfillmentStatus } from '../types';
-import api, { ApiError, type SnapPaymentResponse, type CourierOption } from '../services/api';
+import type { TbMasyarakat, TbPetugas, TbBarang, TbLelang, TbTheme, TbSesiLelang, HistoryLelang, TbPembayaran, WalletTransaction, NotificationItem, UserRole, AuctionDetailItem, FulfillmentOrder, FulfillmentStatus } from '../types';
+import api, { ApiError, type ActionResponse, type AuctionInput, type CourierOption, type ItemInput, type ItemReviewInput, type ItemUpdate, type SessionInput, type ShippingAddressInput, type ShippingCourierInput, type ShippingPaymentInput, type SnapPaymentResponse } from '../services/api';
 import { auth } from '../firebase';
 import { parseSessionProfile } from '../utils/sessionProfile';
-import { mergeBarang, normalizeBarang, normalizeLelang, normalizeHistory } from '../utils/catalogData';
+import { joinAuctions, mergeBarang, normalizeBarang, normalizeLelang, normalizeHistory } from '../utils/catalogData';
 import { normalizeInvoice, normalizeFulfillment, normalizeNotification, normalizeWallet } from '../utils/accountData';
 import { authErrorMessage } from '../utils/authErrors';
 import type { SessionStatus } from '../utils/authFlow';
@@ -34,16 +34,7 @@ interface AuctionContextType {
   selectedThemeId: number | null;
   setSelectedThemeId: (id: number | null) => void;
   sesiLelangList: TbSesiLelang[];
-  createSession: (data: {
-    judul: string;
-    deskripsi: string;
-    tipe: SesiType;
-    tgl_mulai: string;
-    durasi_default_jam: number;
-    gambar_banner: string;
-    kurator?: string;
-    id_lelang_list?: number[];
-  }) => Promise<ActionResult>;
+  createSession: (data: SessionInput) => Promise<ActionResult>;
   assignToSession: (
     lelangId: number,
     sesiId: number,
@@ -71,16 +62,7 @@ interface AuctionContextType {
   lockDepositForAuction: (lelangId: number) => Promise<ActionResult>;
   placeBid: (lelangId: number, customAmount?: number) => Promise<ActionResult>;
   topUpDeposit: (amount: number, requestId: string) => Promise<SnapPaymentResponse>;
-  submitC2CItem: (data: {
-    nama_barang: string;
-    harga_awal: number;
-    kategori: CategoryType;
-    deskripsi_barang: string;
-    foto_barang: string[];
-    dokumen_pendukung: string[];
-    spesifikasi?: Record<string, string>;
-    reserve_price?: number;
-  }) => Promise<{ success: boolean; message: string }>;
+  submitC2CItem: (data: ItemInput) => Promise<ActionResult>;
   cancelC2CSubmission: (barangId: number) => Promise<{ success: boolean; message: string }>;
   payInvoice: (pembayaranId: number) => Promise<SnapPaymentResponse>;
   refreshFinancialData: (confirmation?: PaymentConfirmation) => Promise<boolean>;
@@ -93,44 +75,22 @@ interface AuctionContextType {
   ) => Promise<{ success: boolean; message: string }>;
   resubmitC2CItem: (
     barangId: number,
-    data: {
-      expected_updated_at: string;
-      nama_barang: string;
-      harga_awal: number;
-      kategori: CategoryType;
-      deskripsi_barang: string;
-      foto_barang: string[];
-      dokumen_pendukung: string[];
-      spesifikasi?: Record<string, string>;
-      reserve_price?: number;
-    }
-  ) => Promise<{ success: boolean; message: string }>;
+    data: ItemInput & Pick<ItemUpdate, 'expected_updated_at'>
+  ) => Promise<ActionResult>;
 
   // Officer / Admin Actions
   approveC2CListing: (
     barangId: number,
-    config: {
-      expected_updated_at: string;
-      kelipatan_minimal: number;
-      uang_jaminan: number;
-      reserve_price?: number;
-      tgl_mulai?: string;
-      tgl_selesai?: string;
-    }
+    config: Omit<ItemReviewInput, 'status' | 'catatan_kurasi'> & Required<Pick<ItemReviewInput, 'kelipatan_minimal' | 'uang_jaminan'>>
   ) => Promise<ActionResult>;
   updateBarangInfo: (
     barangId: number,
-    data: Partial<Pick<TbBarang, 'nama_barang' | 'deskripsi_barang' | 'harga_awal' | 'kategori' | 'reserve_price'>> & { expected_updated_at: string }
+    data: ItemUpdate
   ) => Promise<ActionResult>;
   rejectC2CListing: (barangId: number, reason: string, expectedUpdatedAt: string) => Promise<ActionResult>;
   createOfficerAuction: (
-    barangData: Omit<TbBarang, 'id_barang' | 'tanggal' | 'status_verifikasi'>,
-    lelangData: {
-      tgl_mulai: string;
-      tgl_selesai: string;
-      kelipatan_minimal: number;
-      uang_jaminan: number;
-    }
+    barangData: ItemInput,
+    lelangData: AuctionInput
   ) => Promise<ActionResult>;
   updateAuctionStatus: (lelangId: number, status: 'dibuka' | 'ditutup' | 'dibatalkan') => Promise<ActionResult>;
 
@@ -166,27 +126,15 @@ interface AuctionContextType {
 
   // Fulfillment & Ekspedisi
   fulfillmentList: FulfillmentOrder[];
-  recordShippingPayment: (id: string, data: { reference: string; amount: number; courier: string; service: string; expected_updated_at: string }) => Promise<ActionResult>;
+  recordShippingPayment: (id: string, data: ShippingPaymentInput) => Promise<ActionResult>;
   getFulfillmentByInvoice: (invoiceId: number) => FulfillmentOrder | undefined;
   updateFulfillmentAddress: (
     fulfillmentId: string,
-    addressData: {
-      expected_updated_at: string;
-      nama_penerima: string;
-      telp_penerima: string;
-      alamat_lengkap: string;
-      kota: string;
-      kode_pos: string;
-    }
+    addressData: ShippingAddressInput
   ) => Promise<ActionResult>;
   updateFulfillmentCourier: (
     fulfillmentId: string,
-    courierData: {
-      expected_updated_at: string;
-      kurir: string;
-      layanan_kurir: string;
-      ongkir: number;
-    }
+    courierData: ShippingCourierInput
   ) => Promise<ActionResult>;
   updateFulfillmentTracking: (
     fulfillmentId: string,
@@ -200,9 +148,9 @@ interface AuctionContextType {
     rating: number,
     ulasan: string
   ) => Promise<ActionResult>;
-  aturJadwalHarian: (tanggal: string, jam: string, catatan?: string) => Promise<any>;
-  aturDurasiKategori: (kategori: string, durasi: number) => Promise<any>;
-  bukaLelangSerentakHariIni: () => Promise<any>;
+  aturJadwalHarian: (tanggal: string, jam: string, catatan?: string) => Promise<ActionResult>;
+  aturDurasiKategori: (kategori: string, durasi: number) => Promise<ActionResult>;
+  bukaLelangSerentakHariIni: () => Promise<ActionResult>;
 }
 
 const AuctionContext = createContext<AuctionContextType | undefined>(undefined);
@@ -246,15 +194,33 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const currentUser = useMemo(() => masyarakatList.find(user => user.id_user === currentUserId) || null, [masyarakatList, currentUserId]);
   const currentOfficer = useMemo(() => petugasList.find(officer => officer.id_petugas === currentOfficerId) || null, [petugasList, currentOfficerId]);
 
+  useEffect(() => {
+    for (const key of [
+      'lelang_jwt_token',
+      'lelang_masyarakat_v1',
+      'lelang_petugas_v1',
+      'lelang_barang_v1',
+      'lelang_lelang_v1',
+      'lelang_themes_v1',
+      'lelang_sessions_v1',
+      'lelang_history_v1',
+      'lelang_pembayaran_v1',
+      'lelang_transactions_v1',
+      'lelang_notifs_v1',
+      'lelang_held_deposits_v1',
+      'lelang_autobids_v1',
+      'lelang_fulfillment_v1',
+    ]) {
+      try { localStorage.removeItem(key); } catch { /* Session cleanup does not depend on browser storage. */ }
+    }
+  }, []);
+
   const clearSession = useCallback(() => {
     sessionVersion.current++;
     accountRequest.current++; walletRequest.current++;
     setCurrentUserId(null); setCurrentOfficerId(0); setCurrentRole('masyarakat'); setMasyarakatList([]); setPetugasList([]);
     setPembayaranList([]); setTransactionsList([]); setNotificationsList([]); setFulfillmentList([]); setHeldDeposits({}); setAutoBids({}); setCourierOptions([]); setMidtransModal(null);
     setPrivateItems([]); setStaffAuctionRows([]); setAccountDataStatus('idle'); setAccountUpdatedAt(null); setSessionStatus('guest');
-    for (const key of ['lelang_masyarakat_v1', 'lelang_petugas_v1', 'lelang_barang_v1', 'lelang_lelang_v1', 'lelang_themes_v1', 'lelang_sessions_v1', 'lelang_history_v1', 'lelang_pembayaran_v1', 'lelang_transactions_v1', 'lelang_notifs_v1', 'lelang_held_deposits_v1', 'lelang_autobids_v1', 'lelang_fulfillment_v1']) {
-      try { localStorage.removeItem(key); } catch { /* Session cleanup does not depend on browser storage. */ }
-    }
   }, []);
 
   const loadCatalog = useCallback(async () => {
@@ -263,8 +229,8 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       const responses = await Promise.all([api.getCatalog(), api.getAuctions(), api.getSessions(), api.getThemes(), api.getAllHistory()]);
       if (!responses.every(response => Array.isArray(response?.data))) throw new Error('Respons katalog tidak valid.');
       const [items, auctions, sessions, themes, history] = responses;
-      const remoteAuctions = auctions.data.map(normalizeLelang) as TbLelang[];
-      const remoteItems = items.data.map(normalizeBarang) as TbBarang[];
+      const remoteAuctions = auctions.data.map(normalizeLelang);
+      const remoteItems = items.data.map(normalizeBarang);
       const remoteHistory = history.data.map((bid: Record<string, unknown>) => normalizeHistory(bid, remoteAuctions));
       const remoteSessions = sessions.data.map((session: TbSesiLelang) => ({
         ...session,
@@ -377,13 +343,13 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const setMasyarakatSession = useCallback((profile: TbMasyarakat) => {
     setPrivateItems([]); setStaffAuctionRows([]); setHeldDeposits({}); setAutoBids({}); setPembayaranList([]); setTransactionsList([]); setFulfillmentList([]); setNotificationsList([]);
-    setMasyarakatList([profile]); setCurrentUserId(profile.id_user); setCurrentOfficerId(0); setCurrentRole('masyarakat'); api.setToken(null);
+    setMasyarakatList([profile]); setCurrentUserId(profile.id_user); setCurrentOfficerId(0); setCurrentRole('masyarakat');
   }, []);
   const setPetugasSession = useCallback((profile: TbPetugas) => {
     setPrivateItems([]); setStaffAuctionRows([]); setHeldDeposits({}); setAutoBids({}); setPembayaranList([]); setTransactionsList([]); setFulfillmentList([]); setNotificationsList([]);
-    setPetugasList([profile]); setCurrentOfficerId(profile.id_petugas); setCurrentUserId(null); setCurrentRole(profile.id_level === 1 ? 'administrator' : 'petugas'); api.setToken(null);
+    setPetugasList([profile]); setCurrentOfficerId(profile.id_petugas); setCurrentUserId(null); setCurrentRole(profile.id_level === 1 ? 'administrator' : 'petugas');
   }, []);
-  const logout = useCallback(async () => { await signOut(auth); api.setToken(null); clearSession(); }, [clearSession]);
+  const logout = useCallback(async () => { await signOut(auth); clearSession(); }, [clearSession]);
   const reloadSession = useCallback(() => setSessionAttempt(attempt => attempt + 1), []);
 
   useEffect(() => {
@@ -392,7 +358,7 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
     const unsubscribe = onAuthStateChanged(auth, firebaseUser => {
       const currentEvent = ++event;
       clearSession();
-      if (!firebaseUser) { api.setToken(null); clearSession(); return; }
+      if (!firebaseUser) return;
       setSessionStatus('loading');
       void api.me().then(response => {
         if (!active || currentEvent !== event) return;
@@ -409,33 +375,28 @@ export const AuctionProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return () => { active = false; unsubscribe(); };
   }, [setMasyarakatSession, setPetugasSession, clearSession, sessionAttempt]);
 
-  const getAuctionDetail = useCallback((lelangId: number): AuctionDetailItem | null => {
-    const lelang = lelangList.find(auction => auction.id_lelang === lelangId);
-    if (!lelang) return null;
-    const barang = barangList.find(item => item.id_barang === lelang.id_barang);
-    if (!barang) return null;
-    const history = historyList.filter(bid => bid.id_lelang === lelangId).sort((a, b) => b.penawaran_harga - a.penawaran_harga);
-    const winnerID = lelang.id_user;
-    const winnerName = history.find(bid => bid.id_user === winnerID)?.nama_user;
-    const penawarTertinggi = masyarakatList.find(user => user.id_user === winnerID) || (winnerID && winnerName ? { id_user: winnerID, nama_lengkap: winnerName } as TbMasyarakat : null);
-    return { lelang, barang, history, totalBids: history.length, penawarTertinggi, petugas: petugasList.find(officer => officer.id_petugas === lelang.id_petugas) || null, penjual: masyarakatList.find(user => user.id_user === barang.id_user) || null };
-  }, [barangList, lelangList, historyList, masyarakatList, petugasList]);
-  const allJoinedAuctions = useMemo(() => lelangList.map(auction => getAuctionDetail(auction.id_lelang)).filter((item): item is AuctionDetailItem => item !== null), [lelangList, getAuctionDetail]);
+  const allJoinedAuctions = useMemo(() => joinAuctions(lelangList, barangList, historyList, masyarakatList, petugasList), [lelangList, barangList, historyList, masyarakatList, petugasList]);
+  const auctionsByID = useMemo(() => new Map(allJoinedAuctions.map(item => [item.lelang.id_lelang, item])), [allJoinedAuctions]);
+  const getAuctionDetail = useCallback((lelangId: number): AuctionDetailItem | null => auctionsByID.get(lelangId) || null, [auctionsByID]);
   const activeAuctions = useMemo(() => allJoinedAuctions.filter(item => item.lelang.status === 'dibuka'), [allJoinedAuctions]);
   const hasDepositLocked = useCallback((lelangId: number, userId?: number) => !!heldDeposits[`${lelangId}_${userId || currentUserId}`], [heldDeposits, currentUserId]);
   const getUserAutoBid = (lelangId: number, userId?: number) => autoBids[`${lelangId}_${userId || currentUserId}`] || null;
 
-  const commit = async (key: string, operation: () => Promise<any>, message: string): Promise<ActionResult> => {
+  const commit = async (key: string, operation: () => Promise<ActionResponse>, message: string): Promise<ActionResult> => {
     const owner = auth.currentUser;
     if (!owner) return { success: false, message: 'Silakan masuk terlebih dahulu.' };
-    const mutationKey = `${sessionVersion.current}:${owner.uid}:${key}`;
+    const revision = sessionVersion.current;
+    const sessionChanged = () => auth.currentUser !== owner || sessionVersion.current !== revision;
+    const changedSessionResult = { success: false, message: 'Sesi akun berubah. Periksa hasil permintaan melalui akun yang mengirimkannya.' };
+    const mutationKey = `${revision}:${owner.uid}:${key}`;
     if (pendingMutations.current.has(mutationKey)) return { success: false, message: 'Permintaan yang sama masih diproses.' };
     pendingMutations.current.add(mutationKey);
     try {
       const response = await operation();
       if (!response?.success) throw new Error(response?.message || 'Server belum mengonfirmasi penyimpanan.');
-      if (auth.currentUser !== owner) return { success: false, message: 'Sesi akun berubah. Periksa hasil permintaan melalui akun yang mengirimkannya.' };
+      if (sessionChanged()) return changedSessionResult;
       const refreshed = await Promise.allSettled([loadCatalog(), loadAccount()]);
+      if (sessionChanged()) return changedSessionResult;
       const stale = refreshed.some(result => result.status === 'rejected');
       return { success: true, message: `${response.message || message}${stale ? ' Data tersimpan, tetapi tampilan belum diperbarui. Muat ulang halaman untuk memeriksa hasilnya.' : ''}`, id_sesi: response.data?.id_sesi, updated_at: response.data?.updated_at };
     } catch (error) {

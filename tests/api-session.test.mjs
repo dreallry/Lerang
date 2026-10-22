@@ -56,3 +56,29 @@ test('an aborted photo selection is not sent after a slow credential refresh', a
   await assert.rejects(request, { name: 'AbortError' });
   assert.equal(requests, 0);
 });
+
+test('shipping and notification identifiers stay in one URL segment and retain command revisions', async t => {
+  const { api } = await fixture(t, { uid: 'fixture-a', getIdToken: async () => 'fixture-token' });
+  const sent = [];
+  globalThis.fetch = async (url, options) => {
+    sent.push({ url, options });
+    return Response.json({ success: true, data: { updated_at: 'fixture-next' } });
+  };
+  const id = 'fixture/part?query#fragment';
+  const recipient = { nama_penerima: 'Fixture', telp_penerima: '081200000000', alamat_lengkap: 'Fixture address', kota: 'Fixture city', kode_pos: '12345', expected_updated_at: 'fixture-reviewed' };
+  await api.updateFulfillmentAddress(id, recipient);
+  await api.updateFulfillmentResi(id, 'fixture-tracking', 'dikirim', 'Fixture handover', 'fixture-reviewed');
+  await api.selesaikanOrder(id, 5, 'Fixture only');
+  await api.markNotifikasiRead(id);
+  const encoded = encodeURIComponent(id);
+  assert.deepEqual(sent.map(item => item.url), [
+    `/api/fulfillment/${encoded}/alamat`, `/api/fulfillment/${encoded}/resi`,
+    `/api/fulfillment/${encoded}/selesai`, `/api/notifikasi/${encoded}/read`,
+  ]);
+  for (const item of sent) {
+    assert.equal(item.options.headers.get('Authorization'), 'Bearer fixture-token');
+    assert.equal(item.options.headers.get('Content-Type'), 'application/json');
+  }
+  assert.equal(JSON.parse(sent[0].options.body).expected_updated_at, 'fixture-reviewed');
+  assert.equal(JSON.parse(sent[1].options.body).expected_updated_at, 'fixture-reviewed');
+});

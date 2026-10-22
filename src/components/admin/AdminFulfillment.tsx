@@ -3,6 +3,7 @@ import { useAuction } from '../../context/AuctionContext';
 import type { FulfillmentOrder, FulfillmentStatus } from '../../types';
 import { formatDateIndo, formatRupiah } from '../../utils/formatters';
 import { isPickup, nextShippingStatus, recipientReady, shippingBlockReason, shippingLabels } from '../../utils/shipping';
+import { useFormFeedback } from '../common/FormFeedback';
 
 export function AdminFulfillment({ selectedInvoiceId, onNavigate }: { selectedInvoiceId?: number | null; onNavigate: (view: string, id?: number) => void }) {
   const { fulfillmentList, barangList, accountDataStatus, reloadAccountData, accountUpdatedAt } = useAuction();
@@ -31,6 +32,7 @@ export function AdminFulfillment({ selectedInvoiceId, onNavigate }: { selectedIn
 }
 
 function ShippingDetail({ order, disabled }: { order: FulfillmentOrder; disabled: boolean }) {
+  const { showError, clearFeedback } = useFormFeedback();
   const { pembayaranList, barangList, courierOptions, reloadAccountData, updateFulfillmentAddress, updateFulfillmentCourier, updateFulfillmentTracking, recordShippingPayment } = useAuction();
   const invoice = pembayaranList.find(invoice => invoice.id_pembayaran === order.id_pembayaran);
   const blocked = shippingBlockReason(order, invoice);
@@ -57,17 +59,18 @@ function ShippingDetail({ order, disabled }: { order: FulfillmentOrder; disabled
     setQuote({ kurir: isPickup(order) ? '' : order.kurir || '', layanan_kurir: isPickup(order) ? '' : order.layanan_kurir || '', ongkir: String(order.ongkir ?? '') });
     setResi(order.nomor_resi || '');
     setReference(''); setNote(''); setAction('next');
-    setFailed(false); setMessage('Formulir menggunakan data pengiriman terbaru. Periksa tujuan dan ongkir sebelum menyimpan.');
+    setFailed(false); setMessage('Formulir menggunakan data pengiriman terbaru. Periksa tujuan dan ongkir sebelum menyimpan.'); clearFeedback();
   };
   const mutate = async (operation: () => Promise<{ success: boolean; message: string; updated_at?: string }>) => {
     if (locked) return;
-    setSaving(true); setMessage('');
+    setSaving(true); setMessage(''); clearFeedback();
     try {
       const result = await operation();
       if (result.success && typeof result.updated_at === 'string') setVersion(result.updated_at);
       setFailed(!result.success); setMessage(result.message);
+      if (!result.success) showError(result.message);
     }
-    catch { setFailed(true); setMessage('Pembaruan belum dapat dipastikan. Muat ulang data sebelum mengulang tindakan.'); }
+    catch { const message = 'Pembaruan belum dapat dipastikan. Muat ulang data sebelum mengulang tindakan.'; setFailed(true); setMessage(message); showError(message); }
     finally { setSaving(false); }
   };
   const saveAddress = (event: FormEvent) => { event.preventDefault(); void mutate(async () => {
@@ -78,7 +81,7 @@ function ShippingDetail({ order, disabled }: { order: FulfillmentOrder; disabled
   const saveQuote = (event: FormEvent) => {
     event.preventDefault();
     const pickup = courierOptions.find(option => option.id === 'self_pickup');
-    if (mode === 'pickup' && !pickup) { setFailed(true); setMessage('Layanan ambil mandiri belum tersedia dari server. Muat ulang data.'); return; }
+    if (mode === 'pickup' && !pickup) { const message = 'Layanan ambil mandiri belum tersedia dari server. Muat ulang data.'; setFailed(true); setMessage(message); showError(message); return; }
     void mutate(() => updateFulfillmentCourier(order.id_fulfillment, { ...(mode === 'pickup' ? { kurir: pickup!.name, layanan_kurir: pickup!.service, ongkir: pickup!.price } : { ...quote, ongkir: Number(quote.ongkir) }), expected_updated_at: version }));
   };
   const saveTracking = (event: FormEvent) => { event.preventDefault(); const status = action === 'note' ? order.status : next; if (status) void mutate(async () => {
@@ -88,7 +91,7 @@ function ShippingDetail({ order, disabled }: { order: FulfillmentOrder; disabled
   }); };
 
   return <article className="min-w-0 space-y-6" aria-label={`Rincian ${order.id_fulfillment}`}>
-    <div className="border border-border bg-card p-5 space-y-3"><h2 className="text-xl font-medium">{barangList.find(item => item.id_barang === order.id_barang)?.nama_barang || `Barang #${order.id_barang}`}</h2><p className="break-all text-sm">{order.id_fulfillment} · INV-{order.id_pembayaran} · {shippingLabels[order.status]}</p><p className="text-sm text-muted-foreground">Diperbarui {formatDateIndo(order.tgl_update)}. Pembeli #{order.id_user_pembeli}.</p>{blocked && <p role="status" className="border border-border bg-muted p-3 text-sm">{blocked}</p>}{message && <p role={failed ? 'alert' : 'status'} className={`border border-border p-3 text-sm ${failed ? 'text-destructive' : ''}`}>{message}</p>}</div>
+    <div className="border border-border bg-card p-5 space-y-3"><h2 className="text-xl font-medium">{barangList.find(item => item.id_barang === order.id_barang)?.nama_barang || `Barang #${order.id_barang}`}</h2><p className="break-all text-sm">{order.id_fulfillment} · INV-{order.id_pembayaran} · {shippingLabels[order.status]}</p><p className="text-sm text-muted-foreground">Diperbarui {formatDateIndo(order.tgl_update)}. Pembeli #{order.id_user_pembeli}.</p>{blocked && <p role="status" className="border border-border bg-muted p-3 text-sm">{blocked}</p>}{message && <p role={failed ? undefined : 'status'} className={`border border-border p-3 text-sm ${failed ? 'text-destructive' : ''}`}>{message}</p>}</div>
     {failed && <button type="button" className="button-secondary" disabled={saving || disabled} onClick={reloadAccountData}>Periksa pembaruan pengiriman</button>}
     {stale && <div role="alert" className="space-y-3 border border-destructive/30 bg-destructive/5 p-4 text-sm"><p>Pesanan telah berubah. Isianmu tetap disimpan dan belum dikirim. Periksa penerima dan tujuan terbaru sebelum melanjutkan.</p><p>Memuat versi terbaru akan mengganti isian formulir dengan data server, termasuk mengosongkan catatan dan referensi yang belum disimpan.</p><button type="button" className="button-secondary" disabled={saving || disabled} onClick={loadCurrentVersion}>Gunakan versi terbaru</button></div>}
     <section className="border border-border bg-card p-5 space-y-4"><h3 className="text-lg font-medium">Penerima dan tujuan</h3><p className="text-sm leading-6">{order.nama_penerima || 'Penerima belum diisi'} · {order.telp_penerima || 'Kontak belum diisi'}<br />{isPickup(order) ? 'Ambil mandiri; alamat pengiriman tidak diwajibkan.' : `${order.alamat_lengkap || 'Alamat belum diisi'} ${order.kota || ''} ${order.kode_pos || ''}`}</p>{editable && !blocked && <form onSubmit={saveAddress} className="space-y-4"><fieldset disabled={locked || paidShipping} className="grid gap-4 sm:grid-cols-2">{(['nama_penerima', 'telp_penerima', 'alamat_lengkap', 'kota', 'kode_pos'] as const).map(field => <label key={field} className={`grid gap-2 text-sm ${field === 'alamat_lengkap' ? 'sm:col-span-2' : ''}`}>{{ nama_penerima: 'Nama penerima', telp_penerima: 'Telepon penerima', alamat_lengkap: 'Alamat lengkap', kota: 'Kota / kabupaten', kode_pos: 'Kode pos' }[field]}<input className="catalog-input w-full" type={field === 'telp_penerima' ? 'tel' : 'text'} value={address[field]} maxLength={field === 'alamat_lengkap' ? 1000 : field === 'telp_penerima' ? 25 : field === 'kode_pos' ? 5 : 100} required={['nama_penerima', 'telp_penerima'].includes(field) || !isPickup(order)} pattern={field === 'kode_pos' && !isPickup(order) ? '[0-9]{5}' : undefined} onChange={event => setAddress({ ...address, [field]: event.target.value })} /></label>)}<button type="submit" className="button-primary sm:col-span-2">Simpan data penerima</button></fieldset>{paidShipping && <p className="text-sm text-muted-foreground">Ongkir sudah dicatat dibayar; perubahan tujuan memerlukan penyelesaian dengan petugas terlebih dahulu.</p>}</form>}</section>

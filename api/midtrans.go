@@ -19,7 +19,6 @@ var (
 )
 
 type midtransSettings struct {
-	merchantId  string
 	serverKey   string
 	clientKey   string
 	environment midtrans.EnvironmentType
@@ -28,13 +27,7 @@ type midtransSettings struct {
 }
 
 func loadMidtransSettings(serverKey, clientKey, productionValue string) (midtransSettings, error) {
-	merchantId := strings.TrimSpace(os.Getenv("MIDTRANS_MERCHANT_ID"))
-	if merchantId == "" {
-		merchantId = "M113830183"
-	}
-
 	settings := midtransSettings{
-		merchantId:  merchantId,
 		serverKey:   strings.TrimSpace(serverKey),
 		clientKey:   strings.TrimSpace(clientKey),
 		environment: midtrans.Sandbox,
@@ -131,17 +124,6 @@ func VerifikasiSignatureMidtrans(orderID, statusCode, grossAmount, signature str
 	return hmac.Equal(sum[:], provided)
 }
 
-func StatusLunasMidtrans(transactionStatus, fraudStatus string) bool {
-	switch transactionStatus {
-	case "settlement":
-		return true
-	case "capture":
-		return fraudStatus == "accept"
-	default:
-		return false
-	}
-}
-
 func midtransClientKey() string {
 	return midtransConfig.clientKey
 }
@@ -150,21 +132,9 @@ func midtransProduction() bool {
 	return midtransConfig.production
 }
 
-func MidtransMerchantID() string {
-	return midtransConfig.merchantId
-}
-
 func MidtransEnvironment() string {
 	if midtransConfig.production {
 		return "production"
 	}
 	return "sandbox"
-}
-
-func MidtransClientKey() string {
-	return midtransConfig.clientKey
-}
-
-func MidtransProduction() bool {
-	return midtransConfig.production
 }

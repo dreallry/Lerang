@@ -1,4 +1,4 @@
-import type { TbBarang, TbLelang, HistoryLelang } from '../types';
+import type { TbBarang, TbLelang, HistoryLelang, TbMasyarakat, TbPetugas, AuctionDetailItem } from '../types';
 
 function positiveID(value: unknown): number {
   const id = Number(value);
@@ -85,4 +85,39 @@ export function normalizeHistory(data: Record<string, unknown>, auctions: TbLela
 
 export function mergeBarang(first: TbBarang[], latest: TbBarang[]): TbBarang[] {
   return [...new Map([...first, ...latest].map(item => [item.id_barang, item])).values()];
+}
+
+export function joinAuctions(
+  auctions: readonly TbLelang[],
+  items: readonly TbBarang[],
+  bids: readonly HistoryLelang[],
+  users: readonly TbMasyarakat[],
+  officers: readonly TbPetugas[]
+): AuctionDetailItem[] {
+  const itemsByID = new Map(items.map(item => [item.id_barang, item]));
+  const usersByID = new Map(users.map(user => [user.id_user, user]));
+  const officersByID = new Map(officers.map(officer => [officer.id_petugas, officer]));
+  const bidsByAuction = new Map<number, HistoryLelang[]>();
+  for (const bid of bids) {
+    const history = bidsByAuction.get(bid.id_lelang);
+    if (history) history.push(bid);
+    else bidsByAuction.set(bid.id_lelang, [bid]);
+  }
+  for (const history of bidsByAuction.values()) history.sort((a, b) => b.penawaran_harga - a.penawaran_harga);
+
+  const joined: AuctionDetailItem[] = [];
+  for (const lelang of auctions) {
+    const barang = itemsByID.get(lelang.id_barang);
+    if (!barang) continue;
+    const history = bidsByAuction.get(lelang.id_lelang) || [];
+    const winnerName = history.find(bid => bid.id_user === lelang.id_user)?.nama_user;
+    const penawarTertinggi = usersByID.get(lelang.id_user ?? 0)
+      || (lelang.id_user && winnerName ? { id_user: lelang.id_user, nama_lengkap: winnerName } : null);
+    joined.push({
+      lelang, barang, history, totalBids: history.length, penawarTertinggi,
+      petugas: officersByID.get(lelang.id_petugas) || null,
+      penjual: usersByID.get(barang.id_user ?? 0) || null,
+    });
+  }
+  return joined;
 }

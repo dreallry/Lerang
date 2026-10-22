@@ -4,8 +4,10 @@ import { Eye, EyeOff } from 'lucide-react';
 import { auth } from '../../firebase';
 import { readEmailAction, appLoginUrl } from '../../utils/authFlow';
 import { authErrorMessage } from '../../utils/authErrors';
+import { useFormFeedback } from '../common/FormFeedback';
 
 export function EmailActionPage() {
+  const { showError, clearFeedback } = useFormFeedback();
   const [action] = useState(() => readEmailAction(location.href));
   const [phase, setPhase] = useState<'checking' | 'ready' | 'done' | 'error'>('checking');
   const [email, setEmail] = useState('');
@@ -33,8 +35,8 @@ export function EmailActionPage() {
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (action.mode === 'resetPassword' && password !== confirm) { setError('Konfirmasi kata sandi belum sama.'); return; }
-    setBusy(true); setError('');
+    if (action.mode === 'resetPassword' && password !== confirm) { const message = 'Konfirmasi kata sandi belum sama.'; setError(message); showError(message, { target: document.getElementById('confirm-password') }); return; }
+    setBusy(true); setError(''); clearFeedback();
     try {
       if (action.mode === 'resetPassword') {
         await confirmPasswordReset(auth, action.code, password);
@@ -45,7 +47,7 @@ export function EmailActionPage() {
       }
       setPassword(''); setConfirm(''); setPhase('done');
       history.replaceState(null, '', location.pathname + '#auth-action');
-    } catch (error) { setError(authErrorMessage(error)); }
+    } catch (error) { const message = authErrorMessage(error); setError(message); showError(message); }
     finally { setBusy(false); }
   };
   const reset = action.mode === 'resetPassword';
@@ -62,7 +64,7 @@ export function EmailActionPage() {
         <div><label htmlFor="new-password" className="mb-2 block text-sm font-medium">Kata sandi baru</label><div className="flex items-center rounded border border-border focus-within:ring-2 focus-within:ring-primary"><input id="new-password" required minLength={6} autoComplete="new-password" type={show ? 'text' : 'password'} value={password} onChange={event => setPassword(event.target.value)} disabled={busy} className="min-h-12 min-w-0 flex-1 bg-transparent px-3 text-sm outline-none" /><button type="button" aria-label={show ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'} aria-pressed={show} onClick={() => setShow(value => !value)} className="flex h-12 w-12 items-center justify-center focus-ring">{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div><p className="mt-2 text-xs text-muted-foreground">Gunakan sedikitnya 6 karakter dan hindari kata sandi yang pernah dipakai.</p></div>
         <div><label htmlFor="confirm-password" className="mb-2 block text-sm font-medium">Ulangi kata sandi baru</label><input id="confirm-password" type={show ? 'text' : 'password'} required minLength={6} autoComplete="new-password" value={confirm} onChange={event => setConfirm(event.target.value)} disabled={busy} className="min-h-12 w-full rounded border border-border bg-transparent px-3 text-sm focus-ring" /></div>
       </>}
-      {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
       <button type="submit" disabled={busy} className="button-primary w-full disabled:opacity-60">{busy ? 'Menyimpan...' : reset ? 'Simpan kata sandi baru' : 'Konfirmasi email'}</button>
     </form>}
     <a href={loginUrl} className="mt-6 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4">Kembali ke halaman masuk</a>
